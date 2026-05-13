@@ -220,17 +220,3 @@ defer g.Close()
 go run ./cmd/demo
 ```
 
-## Tests
-
-Tests and pwn integration examples live outside this package in:
-
-```text
-../gpwntools_test
-```
-
-Run them with:
-
-```bash
-cd ../gpwntools_test
-go test ./...
-```
