@@ -5,7 +5,7 @@
 ## Use as a Package
 
 ```go
-import "gpwntools"
+import "github.com/ret2ntr/gpwntools"
 
 payload := gpwntools.Gp64(0xdeadbeef)
 _ = payload
@@ -219,4 +219,3 @@ defer g.Close()
 ```bash
 go run ./cmd/demo
 ```
-

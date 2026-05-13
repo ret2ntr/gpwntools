@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"runtime"
 
-	"gpwntools"
+	"github.com/ret2ntr/gpwntools"
 )
 
 func main() {
