@@ -49,12 +49,9 @@ func ProcessWithOptions(argv []string, opts ProcessOptions) (*ProcessTube, error
 		return nil, errors.New("process requires at least one argument")
 	}
 
-	cmd := exec.Command(argv[0], argv[1:]...)
-	cmd.Dir = opts.Cwd
-	if opts.ClearEnv {
-		cmd.Env = append([]string{}, opts.Env...)
-	} else if len(opts.Env) > 0 {
-		cmd.Env = append(os.Environ(), opts.Env...)
+	cmd, err := processCommand(argv, opts)
+	if err != nil {
+		return nil, err
 	}
 
 	stdin, err := cmd.StdinPipe()
@@ -233,4 +230,18 @@ func (p *ProcessTube) bufferedReader() *bufio.Reader {
 		p.reader = bufio.NewReader(p.output)
 	}
 	return p.reader
+}
+
+func applyProcessOptions(cmd *exec.Cmd, opts ProcessOptions) {
+	cmd.Dir = opts.Cwd
+	if opts.ClearEnv || len(opts.Env) > 0 {
+		cmd.Env = processTargetEnv(opts)
+	}
+}
+
+func processTargetEnv(opts ProcessOptions) []string {
+	if opts.ClearEnv {
+		return append([]string{}, opts.Env...)
+	}
+	return append(os.Environ(), opts.Env...)
 }

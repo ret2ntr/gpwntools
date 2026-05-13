@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"path/filepath"
 	"runtime"
-
 	"github.com/ret2ntr/gpwntools"
 )
 
