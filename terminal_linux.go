@@ -25,16 +25,12 @@ func makeRawIfTerminal(input io.Reader) (func() error, error) {
 		return noopTerminalRestore, err
 	}
 
-	rawState := *oldState
-	rawState.Iflag &^= syscall.IGNBRK | syscall.BRKINT | syscall.PARMRK | syscall.ISTRIP | syscall.INLCR | syscall.IGNCR | syscall.ICRNL | syscall.IXON
-	rawState.Oflag &^= syscall.OPOST
-	rawState.Lflag &^= syscall.ECHO | syscall.ECHONL | syscall.ICANON | syscall.IEXTEN
-	rawState.Cflag &^= syscall.CSIZE | syscall.PARENB
-	rawState.Cflag |= syscall.CS8
-	rawState.Cc[syscall.VMIN] = 1
-	rawState.Cc[syscall.VTIME] = 0
+	cbreakState := *oldState
+	cbreakState.Lflag &^= syscall.ICANON | syscall.ECHOCTL
+	cbreakState.Cc[syscall.VMIN] = 1
+	cbreakState.Cc[syscall.VTIME] = 0
 
-	if err := setTermios(fd, &rawState); err != nil {
+	if err := setTermios(fd, &cbreakState); err != nil {
 		return noopTerminalRestore, err
 	}
 
