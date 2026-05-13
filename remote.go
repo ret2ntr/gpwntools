@@ -34,8 +34,9 @@ func RemoteAddress(address string) (*RemoteTube, error) {
 		return nil, err
 	}
 	return &RemoteTube{
-		conn:   conn,
-		reader: bufio.NewReader(conn),
+		conn:    conn,
+		reader:  bufio.NewReader(conn),
+		timeout: contextTimeout(),
 	}, nil
 }
 

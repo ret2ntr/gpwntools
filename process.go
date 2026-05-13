@@ -76,11 +76,12 @@ func ProcessWithOptions(argv []string, opts ProcessOptions) (*ProcessTube, error
 	_ = outputWriter.Close()
 
 	p := &ProcessTube{
-		cmd:    cmd,
-		stdin:  stdin,
-		output: outputReader,
-		reader: bufio.NewReader(outputReader),
-		done:   make(chan struct{}),
+		cmd:     cmd,
+		stdin:   stdin,
+		output:  outputReader,
+		reader:  bufio.NewReader(outputReader),
+		done:    make(chan struct{}),
+		timeout: contextTimeout(),
 	}
 
 	go func() {
@@ -183,9 +184,14 @@ func (p *ProcessTube) PID() int {
 	return p.cmd.Process.Pid
 }
 
-// GDB attaches gdb to the process.
+// GDB attaches gdb to the process in another terminal.
 func (p *ProcessTube) GDB(script string) (*GDBSession, error) {
 	return GDBAttach(p, script)
+}
+
+// GDBHere attaches gdb to the process in the current terminal.
+func (p *ProcessTube) GDBHere(script string) (*GDBSession, error) {
+	return GDBAttachHere(p, script)
 }
 
 func (p *ProcessTube) Close() error {

@@ -2,7 +2,6 @@ package gpwntools
 
 import (
 	"bytes"
-	"encoding/binary"
 	"fmt"
 	"sort"
 )
@@ -105,25 +104,25 @@ func flatPart(part any) ([]byte, error) {
 	case string:
 		return []byte(v), nil
 	case uint8:
-		return []byte{v}, nil
+		return packUintWidth(uint64(v), 1), nil
 	case uint16:
-		return Gp16(v), nil
+		return packUintWidth(uint64(v), 2), nil
 	case uint32:
-		return Gp32(v), nil
+		return packUintWidth(uint64(v), 4), nil
 	case uint64:
-		return Gp64(v), nil
+		return packUintWidth(v, 8), nil
 	case uint:
-		return Gp64(uint64(v)), nil
+		return packContextWord(uint64(v))
 	case int:
-		return Gp64(uint64(v)), nil
+		return packContextWord(uint64(v))
 	case int8:
-		return []byte{byte(v)}, nil
+		return packUintWidth(uint64(uint8(v)), 1), nil
 	case int16:
-		return Gp16(uint16(v)), nil
+		return packUintWidth(uint64(uint16(v)), 2), nil
 	case int32:
-		return Gp32(uint32(v)), nil
+		return packUintWidth(uint64(uint32(v)), 4), nil
 	case int64:
-		return Gp64(uint64(v)), nil
+		return packUintWidth(uint64(v), 8), nil
 	default:
 		return nil, fmt.Errorf("unsupported flat part %T", part)
 	}
@@ -136,14 +135,36 @@ func cyclicNeedle(needle any) ([]byte, error) {
 	case string:
 		return []byte(v), nil
 	case uint32:
-		return Gp32(v), nil
+		return packUintWidth(uint64(v), 4), nil
 	case uint64:
-		return Gp64(v), nil
+		return packUintWidth(v, 8), nil
 	case int:
-		buf := make([]byte, 4)
-		binary.LittleEndian.PutUint32(buf, uint32(v))
-		return buf, nil
+		return packUintWidth(uint64(uint32(v)), 4), nil
 	default:
 		return nil, fmt.Errorf("unsupported cyclic needle %T", needle)
 	}
+}
+
+func packContextWord(v uint64) ([]byte, error) {
+	width := contextBits() / 8
+	if width <= 0 {
+		return nil, fmt.Errorf("unsupported context bits %d", contextBits())
+	}
+	return packUintWidth(v, width), nil
+}
+
+func packUintWidth(v uint64, width int) []byte {
+	buf := make([]byte, width)
+	if contextEndian() == "big" {
+		for i := 0; i < width; i++ {
+			shift := uint((width - 1 - i) * 8)
+			buf[i] = byte(v >> shift)
+		}
+		return buf
+	}
+	for i := 0; i < width; i++ {
+		shift := uint(i * 8)
+		buf[i] = byte(v >> shift)
+	}
+	return buf
 }

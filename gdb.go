@@ -23,6 +23,9 @@ type GDBOptions struct {
 	Script string
 	// Args are extra raw arguments passed to gdb after "-q".
 	Args []string
+	// Terminal starts gdb in another terminal. The shell-escaped gdb command is
+	// appended as the final argument, for example []string{"tmux", "split-window", "-h"}.
+	Terminal []string
 	// Env appends environment variables for the gdb process.
 	Env []string
 	// Dir sets the working directory for the gdb process.
@@ -45,6 +48,18 @@ type GDBSession struct {
 // Supported target types are int, *ProcessTube, *os.Process, *exec.Cmd, and any
 // value implementing PID() int.
 func GDBAttach(target any, script string) (*GDBSession, error) {
+	terminal, err := contextGDBTerminal()
+	if err != nil {
+		return nil, err
+	}
+	return GDBAttachWithOptions(target, GDBOptions{
+		Script:   script,
+		Terminal: terminal,
+	})
+}
+
+// GDBAttachHere starts gdb in the current terminal and attaches to the target.
+func GDBAttachHere(target any, script string) (*GDBSession, error) {
 	return GDBAttachWithOptions(target, GDBOptions{Script: script})
 }
 
@@ -69,6 +84,18 @@ func GDBAttachWithOptions(target any, opts GDBOptions) (*GDBSession, error) {
 
 // GDBDebug starts gdb for a new local process, equivalent to "gdb --args ...".
 func GDBDebug(argv []string, script string) (*GDBSession, error) {
+	terminal, err := contextGDBTerminal()
+	if err != nil {
+		return nil, err
+	}
+	return GDBDebugWithOptions(argv, GDBOptions{
+		Script:   script,
+		Terminal: terminal,
+	})
+}
+
+// GDBDebugHere starts gdb for a new local process in the current terminal.
+func GDBDebugHere(argv []string, script string) (*GDBSession, error) {
 	return GDBDebugWithOptions(argv, GDBOptions{Script: script})
 }
 
@@ -92,6 +119,19 @@ func GDBRemote(host string, port int, binary string, script string) (*GDBSession
 
 // GDBRemoteAddress starts gdb and connects to a gdbserver address.
 func GDBRemoteAddress(address string, binary string, script string) (*GDBSession, error) {
+	terminal, err := contextGDBTerminal()
+	if err != nil {
+		return nil, err
+	}
+	return GDBRemoteAddressWithOptions(address, GDBOptions{
+		Binary:   binary,
+		Script:   script,
+		Terminal: terminal,
+	})
+}
+
+// GDBRemoteAddressHere starts gdb in the current terminal and connects to a gdbserver address.
+func GDBRemoteAddressHere(address string, binary string, script string) (*GDBSession, error) {
 	return GDBRemoteAddressWithOptions(address, GDBOptions{
 		Binary: binary,
 		Script: script,
@@ -160,6 +200,10 @@ func (s *GDBSession) cleanup() error {
 }
 
 func startGDB(args []string, opts GDBOptions, scriptPath string) (*GDBSession, error) {
+	if len(opts.Terminal) > 0 {
+		return startGDBInTerminal(args, opts, scriptPath)
+	}
+
 	cmd := exec.Command(gdbPath(opts), args...)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
@@ -174,6 +218,40 @@ func startGDB(args []string, opts GDBOptions, scriptPath string) (*GDBSession, e
 
 	if err := cmd.Start(); err != nil {
 		_ = session.cleanup()
+		return nil, err
+	}
+	return session, nil
+}
+
+func startGDBInTerminal(args []string, opts GDBOptions, scriptPath string) (*GDBSession, error) {
+	if opts.Terminal[0] == "" {
+		return nil, errors.New("gdb terminal executable must not be empty")
+	}
+
+	command := shellCommand(gdbPath(opts), args)
+	cleanupPath := scriptPath
+	if scriptPath != "" {
+		command += "; rm -f " + shellQuote(scriptPath)
+		scriptPath = ""
+	}
+
+	terminalArgs := append([]string{}, opts.Terminal[1:]...)
+	terminalArgs = append(terminalArgs, command)
+	cmd := exec.Command(opts.Terminal[0], terminalArgs...)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	cmd.Env = append(os.Environ(), opts.Env...)
+	cmd.Dir = opts.Dir
+
+	session := &GDBSession{
+		Cmd:        cmd,
+		ScriptPath: scriptPath,
+	}
+
+	if err := cmd.Start(); err != nil {
+		if cleanupPath != "" {
+			_ = os.Remove(cleanupPath)
+		}
 		return nil, err
 	}
 	return session, nil
@@ -253,6 +331,67 @@ func gdbPath(opts GDBOptions) string {
 	return opts.Path
 }
 
+func contextGDBTerminal() ([]string, error) {
+	terminal := contextTerminal()
+	if len(terminal) == 0 {
+		return nil, errors.New("no gdb terminal found; set gpwntools.Context.Terminal or install tmux/gnome-terminal/konsole/kitty/alacritty/xterm")
+	}
+	return terminal, nil
+}
+
+// GDBTerminalDefault chooses a usable terminal launcher for GDB.
+func GDBTerminalDefault() []string {
+	if os.Getenv("TMUX") != "" && commandExists("tmux") {
+		return GDBTerminalTmuxSplit()
+	}
+	if commandExists("gnome-terminal") {
+		return GDBTerminalGnome()
+	}
+	if commandExists("konsole") {
+		return GDBTerminalKonsole()
+	}
+	if commandExists("kitty") {
+		return GDBTerminalKitty()
+	}
+	if commandExists("alacritty") {
+		return GDBTerminalAlacritty()
+	}
+	if commandExists("xterm") {
+		return GDBTerminalXTerm()
+	}
+	return nil
+}
+
+// GDBTerminalTmuxSplit returns a tmux split-window launcher for GDB.
+func GDBTerminalTmuxSplit() []string {
+	return []string{"tmux", "split-window", "-h"}
+}
+
+// GDBTerminalGnome returns a GNOME Terminal launcher for GDB.
+func GDBTerminalGnome() []string {
+	return []string{"gnome-terminal", "--", "sh", "-lc"}
+}
+
+// GDBTerminalKonsole returns a Konsole launcher for GDB.
+func GDBTerminalKonsole() []string {
+	return []string{"konsole", "-e", "sh", "-lc"}
+}
+
+// GDBTerminalKitty returns a kitty launcher for GDB.
+func GDBTerminalKitty() []string {
+	return []string{"kitty", "sh", "-lc"}
+}
+
+// GDBTerminalAlacritty returns an Alacritty launcher for GDB.
+func GDBTerminalAlacritty() []string {
+	return []string{"alacritty", "-e", "sh", "-lc"}
+}
+
+// GDBTerminalXTerm returns an xterm launcher for GDB.
+func GDBTerminalXTerm() []string {
+	return []string{"xterm", "-e", "sh", "-lc"}
+}
+
 func gdbTargetPID(target any) (int, error) {
 	switch t := target.(type) {
 	case int:
@@ -315,4 +454,34 @@ func normalizeGDBWaitError(err error) error {
 
 func netJoinHostPort(host string, port int) string {
 	return net.JoinHostPort(host, strconv.Itoa(port))
+}
+
+func commandExists(name string) bool {
+	_, err := exec.LookPath(name)
+	return err == nil
+}
+
+func shellCommand(name string, args []string) string {
+	parts := make([]string, 0, len(args)+1)
+	parts = append(parts, shellQuote(name))
+	for _, arg := range args {
+		parts = append(parts, shellQuote(arg))
+	}
+	return strings.Join(parts, " ")
+}
+
+func shellQuote(s string) string {
+	if s == "" {
+		return "''"
+	}
+	if strings.IndexFunc(s, func(r rune) bool {
+		return !(r == '/' || r == '.' || r == '_' || r == '-' || r == ':' || r == '=' ||
+			r == '+' || r == ',' || r == '@' ||
+			(r >= '0' && r <= '9') ||
+			(r >= 'A' && r <= 'Z') ||
+			(r >= 'a' && r <= 'z'))
+	}) == -1 {
+		return s
+	}
+	return "'" + strings.ReplaceAll(s, "'", "'\"'\"'") + "'"
 }

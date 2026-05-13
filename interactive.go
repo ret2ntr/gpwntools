@@ -25,6 +25,12 @@ func Interactive(t Tube) error {
 }
 
 func interactiveWithIO(targetReader io.Reader, targetWriter io.Writer, input io.Reader, output io.Writer, closeWrite func() error) error {
+	restoreTerminal, err := makeRawIfTerminal(input)
+	if err != nil {
+		return err
+	}
+	defer restoreTerminal()
+
 	inputDone := make(chan error, 1)
 
 	go func() {

@@ -11,6 +11,15 @@ payload := gpwntools.Gp64(0xdeadbeef)
 _ = payload
 ```
 
+Context defaults:
+
+```go
+gpwntools.Context.SetArch("amd64")
+gpwntools.Context.SetTerminal("tmux", "split-window", "-h")
+gpwntools.Context.Timeout = 2 * time.Second
+gpwntools.Context.Endian = "little"
+```
+
 Packing helpers:
 
 - `Gp64/Gp32/Gp16/Gp8`: little-endian
@@ -182,6 +191,8 @@ defer p.Close()
 GDB helpers:
 
 ```go
+gpwntools.Context.SetTerminal("tmux", "split-window", "-h")
+
 p, err := gpwntools.Process("./chall")
 if err != nil {
 	panic(err)
@@ -197,8 +208,18 @@ defer g.Close()
 _ = p.Interactive()
 ```
 
+To run GDB in the current terminal instead:
+
 ```go
-g, err := gpwntools.GDBDebug([]string{"./chall", "AAAA"}, "break main\nrun")
+g, err := p.GDBHere("break main\ncontinue")
+if err != nil {
+	panic(err)
+}
+defer g.Close()
+```
+
+```go
+g, err := gpwntools.GDBDebugHere([]string{"./chall", "AAAA"}, "break main\nrun")
 if err != nil {
 	panic(err)
 }

@@ -54,7 +54,7 @@ func AsmWithOptions(code string, opts AsmOptions) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	source, err := asmSource(code, arch, opts.Syntax)
+	source, err := asmSource(code, arch, asmSyntax(arch, opts))
 	if err != nil {
 		return nil, err
 	}
@@ -90,9 +90,19 @@ func AsmWithOptions(code string, opts AsmOptions) ([]byte, error) {
 
 func asmArch(opts AsmOptions) string {
 	if opts.Arch == "" {
-		return defaultAsmArch
+		return contextArch()
 	}
 	return strings.ToLower(opts.Arch)
+}
+
+func asmSyntax(arch string, opts AsmOptions) string {
+	if opts.Syntax != "" {
+		return opts.Syntax
+	}
+	if normalizedAsmFamily(arch) == "x86" {
+		return contextSyntax()
+	}
+	return ""
 }
 
 type asmToolchainConfig struct {
