@@ -540,12 +540,13 @@ func buildTerminalGDBCommand(gdb string, args []string, watchPath string, pidPat
 	}
 
 	var b strings.Builder
+	b.WriteString("set -m; ")
 	b.WriteString(shellCommand(gdb, args))
 	b.WriteString(" & child=$!; ")
 	b.WriteString("echo \"$child\" > ")
 	b.WriteString(shellQuote(pidPath))
 	b.WriteString("; ")
-	b.WriteString("wait \"$child\"; status=$?; ")
+	b.WriteString("fg %1; status=$?; ")
 	b.WriteString("rm -f")
 	for _, path := range cleanup {
 		b.WriteByte(' ')
