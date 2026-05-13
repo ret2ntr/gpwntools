@@ -14,7 +14,7 @@ import (
 type ProcessTube struct {
 	cmd    *exec.Cmd
 	stdin  io.WriteCloser
-	output *os.File
+	output processOutput
 	reader *bufio.Reader
 
 	closeOnce sync.Once
@@ -22,6 +22,12 @@ type ProcessTube struct {
 	done      chan struct{}
 	waitErr   error
 	timeout   time.Duration
+}
+
+type processOutput interface {
+	io.Reader
+	io.Closer
+	SetReadDeadline(time.Time) error
 }
 
 // ProcessOptions configures local process startup.
@@ -32,6 +38,8 @@ type ProcessOptions struct {
 	Env []string
 	// ClearEnv uses only Env instead of inheriting os.Environ().
 	ClearEnv bool
+	// DisablePTY keeps stdout/stderr on a pipe instead of the default PTY.
+	DisablePTY bool
 }
 
 func process(argv ...string) (*ProcessTube, error) {
@@ -54,26 +62,22 @@ func ProcessWithOptions(argv []string, opts ProcessOptions) (*ProcessTube, error
 		return nil, err
 	}
 
-	stdin, err := cmd.StdinPipe()
+	stdin, outputReader, outputWriter, err := processIO(cmd, opts)
 	if err != nil {
 		return nil, err
 	}
-
-	outputReader, outputWriter, err := os.Pipe()
-	if err != nil {
-		_ = stdin.Close()
-		return nil, err
-	}
-	cmd.Stdout = outputWriter
-	cmd.Stderr = outputWriter
 
 	if err := cmd.Start(); err != nil {
 		_ = stdin.Close()
 		_ = outputReader.Close()
-		_ = outputWriter.Close()
+		if outputWriter != nil {
+			_ = outputWriter.Close()
+		}
 		return nil, err
 	}
-	_ = outputWriter.Close()
+	if outputWriter != nil {
+		_ = outputWriter.Close()
+	}
 
 	p := &ProcessTube{
 		cmd:     cmd,
@@ -236,6 +240,33 @@ func (p *ProcessTube) bufferedReader() *bufio.Reader {
 		p.reader = bufio.NewReader(p.output)
 	}
 	return p.reader
+}
+
+func processIO(cmd *exec.Cmd, opts ProcessOptions) (io.WriteCloser, processOutput, io.Closer, error) {
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	if Context.PTY && !opts.DisablePTY {
+		outputReader, outputWriter, err := openProcessPTY()
+		if err != nil {
+			_ = stdin.Close()
+			return nil, nil, nil, err
+		}
+		cmd.Stdout = outputWriter
+		cmd.Stderr = outputWriter
+		return stdin, outputReader, outputWriter, nil
+	}
+
+	outputReader, outputWriter, err := os.Pipe()
+	if err != nil {
+		_ = stdin.Close()
+		return nil, nil, nil, err
+	}
+	cmd.Stdout = outputWriter
+	cmd.Stderr = outputWriter
+	return stdin, outputReader, outputWriter, nil
 }
 
 func applyProcessOptions(cmd *exec.Cmd, opts ProcessOptions) {

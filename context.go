@@ -22,6 +22,8 @@ type ContextConfig struct {
 	Terminal []string
 	// Timeout is copied into newly-created tubes as their default recv timeout.
 	Timeout time.Duration
+	// PTY makes local Process stdout/stderr use a pseudo-terminal by default.
+	PTY bool
 }
 
 // Context stores package-wide defaults, similar to pwntools' context object.
@@ -29,6 +31,7 @@ var Context = ContextConfig{
 	Arch:   defaultContextArch(),
 	OS:     runtime.GOOS,
 	Syntax: "intel",
+	PTY:    defaultContextPTY(),
 }
 
 // DefaultContext returns a fresh copy of the built-in defaults.
@@ -37,6 +40,7 @@ func DefaultContext() ContextConfig {
 		Arch:   defaultContextArch(),
 		OS:     runtime.GOOS,
 		Syntax: "intel",
+		PTY:    defaultContextPTY(),
 	}
 }
 
@@ -162,4 +166,8 @@ func defaultContextArch() string {
 	default:
 		return defaultAsmArch
 	}
+}
+
+func defaultContextPTY() bool {
+	return runtime.GOOS == "linux"
 }

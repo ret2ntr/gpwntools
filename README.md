@@ -18,6 +18,7 @@ gpwntools.Context.SetArch("amd64")
 gpwntools.Context.SetTerminal("tmux", "split-window", "-h")
 gpwntools.Context.Timeout = 2 * time.Second
 gpwntools.Context.Endian = "little"
+gpwntools.Context.PTY = true // Linux default: local Process stdout/stderr use PTY
 ```
 
 Packing helpers:
@@ -186,6 +187,15 @@ if err != nil {
 	panic(err)
 }
 defer p.Close()
+```
+
+On Linux, `Process` uses a PTY for stdout/stderr by default, like pwntools, so
+common C targets flush line-buffered prompts immediately. To force plain pipes:
+
+```go
+p, err := gpwntools.ProcessWithOptions([]string{"./chall"}, gpwntools.ProcessOptions{
+	DisablePTY: true,
+})
 ```
 
 GDB helpers:

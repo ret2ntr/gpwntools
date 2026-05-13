@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"sync"
+	"syscall"
 )
 
 // ErrInteractiveInterrupted is returned when interactive mode is interrupted by Ctrl+C.
@@ -105,7 +106,9 @@ func normalizeInteractiveError(err error) error {
 		errors.Is(err, io.EOF) ||
 		errors.Is(err, io.ErrClosedPipe) ||
 		errors.Is(err, net.ErrClosed) ||
-		errors.Is(err, os.ErrClosed) {
+		errors.Is(err, os.ErrClosed) ||
+		errors.Is(err, syscall.EIO) ||
+		errors.Is(err, syscall.EBADF) {
 		return nil
 	}
 	return err
