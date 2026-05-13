@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
 
 const defaultGDBPath = "gdb"
@@ -36,10 +37,15 @@ type GDBOptions struct {
 type GDBSession struct {
 	Cmd        *exec.Cmd
 	ScriptPath string
+	WatchPath  string
+	PidPath    string
+
+	done       chan struct{}
+	onExit     func() error
+	finishOnce sync.Once
 
 	cleanupOnce sync.Once
 	cleanupErr  error
-	waitOnce    sync.Once
 	waitErr     error
 }
 
@@ -79,7 +85,7 @@ func GDBAttachWithOptions(target any, opts GDBOptions) (*GDBSession, error) {
 		return nil, err
 	}
 	args := buildGDBAttachArgs(pid, opts, scriptPath)
-	return startGDB(args, opts, scriptPath)
+	return startGDB(args, opts, scriptPath, gdbTargetCloser(target))
 }
 
 // GDBDebug starts gdb for a new local process, equivalent to "gdb --args ...".
@@ -109,7 +115,7 @@ func GDBDebugWithOptions(argv []string, opts GDBOptions) (*GDBSession, error) {
 		return nil, err
 	}
 	args := buildGDBDebugArgs(argv, opts, scriptPath)
-	return startGDB(args, opts, scriptPath)
+	return startGDB(args, opts, scriptPath, nil)
 }
 
 // GDBRemote starts gdb and connects to a gdbserver at host:port.
@@ -149,37 +155,25 @@ func GDBRemoteAddressWithOptions(address string, opts GDBOptions) (*GDBSession, 
 		return nil, err
 	}
 	args := buildGDBRemoteArgs(opts, scriptPath)
-	return startGDB(args, opts, scriptPath)
+	return startGDB(args, opts, scriptPath, nil)
 }
 
 // Wait waits for gdb to exit and removes any temporary script file.
 func (s *GDBSession) Wait() error {
-	if s == nil || s.Cmd == nil {
+	if s == nil {
 		return nil
 	}
-	s.waitOnce.Do(func() {
-		s.waitErr = s.Cmd.Wait()
-		if cleanupErr := s.cleanup(); s.waitErr == nil {
-			s.waitErr = cleanupErr
-		}
-	})
+	<-s.done
 	return s.waitErr
 }
 
 // Close kills gdb if it is still running and removes any temporary script file.
 func (s *GDBSession) Close() error {
-	if s == nil || s.Cmd == nil {
+	if s == nil {
 		return nil
 	}
 
-	var err error
-	if s.Cmd.Process != nil {
-		err = s.Cmd.Process.Kill()
-		if errors.Is(err, os.ErrProcessDone) {
-			err = nil
-		}
-	}
-
+	err := s.kill()
 	waitErr := s.Wait()
 	if err == nil {
 		err = normalizeGDBWaitError(waitErr)
@@ -189,19 +183,18 @@ func (s *GDBSession) Close() error {
 
 func (s *GDBSession) cleanup() error {
 	s.cleanupOnce.Do(func() {
-		if s.ScriptPath != "" {
-			s.cleanupErr = os.Remove(s.ScriptPath)
-			if errors.Is(s.cleanupErr, os.ErrNotExist) {
-				s.cleanupErr = nil
+		for _, path := range []string{s.ScriptPath, s.WatchPath, s.PidPath} {
+			if err := removeIfExists(path); s.cleanupErr == nil && err != nil {
+				s.cleanupErr = err
 			}
 		}
 	})
 	return s.cleanupErr
 }
 
-func startGDB(args []string, opts GDBOptions, scriptPath string) (*GDBSession, error) {
+func startGDB(args []string, opts GDBOptions, scriptPath string, onExit func() error) (*GDBSession, error) {
 	if len(opts.Terminal) > 0 {
-		return startGDBInTerminal(args, opts, scriptPath)
+		return startGDBInTerminal(args, opts, scriptPath, onExit)
 	}
 
 	cmd := exec.Command(gdbPath(opts), args...)
@@ -214,26 +207,34 @@ func startGDB(args []string, opts GDBOptions, scriptPath string) (*GDBSession, e
 	session := &GDBSession{
 		Cmd:        cmd,
 		ScriptPath: scriptPath,
+		done:       make(chan struct{}),
+		onExit:     onExit,
 	}
 
 	if err := cmd.Start(); err != nil {
 		_ = session.cleanup()
 		return nil, err
 	}
+	go session.waitForCommand()
 	return session, nil
 }
 
-func startGDBInTerminal(args []string, opts GDBOptions, scriptPath string) (*GDBSession, error) {
+func startGDBInTerminal(args []string, opts GDBOptions, scriptPath string, onExit func() error) (*GDBSession, error) {
 	if opts.Terminal[0] == "" {
 		return nil, errors.New("gdb terminal executable must not be empty")
 	}
 
-	command := shellCommand(gdbPath(opts), args)
-	cleanupPath := scriptPath
-	if scriptPath != "" {
-		command += "; rm -f " + shellQuote(scriptPath)
-		scriptPath = ""
+	watchPath, err := tempMarker("gpwntools-gdb-watch-*")
+	if err != nil {
+		return nil, err
 	}
+	pidPath, err := tempFilePath("gpwntools-gdb-pid-*")
+	if err != nil {
+		_ = removeIfExists(watchPath)
+		return nil, err
+	}
+
+	command := buildTerminalGDBCommand(gdbPath(opts), args, watchPath, pidPath, scriptPath)
 
 	terminalArgs := append([]string{}, opts.Terminal[1:]...)
 	terminalArgs = append(terminalArgs, command)
@@ -246,14 +247,18 @@ func startGDBInTerminal(args []string, opts GDBOptions, scriptPath string) (*GDB
 	session := &GDBSession{
 		Cmd:        cmd,
 		ScriptPath: scriptPath,
+		WatchPath:  watchPath,
+		PidPath:    pidPath,
+		done:       make(chan struct{}),
+		onExit:     onExit,
 	}
 
 	if err := cmd.Start(); err != nil {
-		if cleanupPath != "" {
-			_ = os.Remove(cleanupPath)
-		}
+		_ = session.cleanup()
 		return nil, err
 	}
+	go session.reapLauncher()
+	go session.waitForWatchPath()
 	return session, nil
 }
 
@@ -454,6 +459,163 @@ func normalizeGDBWaitError(err error) error {
 
 func netJoinHostPort(host string, port int) string {
 	return net.JoinHostPort(host, strconv.Itoa(port))
+}
+
+func (s *GDBSession) waitForCommand() {
+	var err error
+	if s.Cmd != nil {
+		err = s.Cmd.Wait()
+	}
+	s.finish(err)
+}
+
+func (s *GDBSession) reapLauncher() {
+	if s.Cmd != nil {
+		if err := s.Cmd.Wait(); err != nil {
+			s.finish(err)
+		}
+	}
+}
+
+func (s *GDBSession) waitForWatchPath() {
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		if _, err := os.Stat(s.WatchPath); errors.Is(err, os.ErrNotExist) {
+			s.finish(nil)
+			return
+		}
+		<-ticker.C
+	}
+}
+
+func (s *GDBSession) finish(err error) {
+	s.finishOnce.Do(func() {
+		err = normalizeGDBWaitError(err)
+		if cleanupErr := s.cleanup(); err == nil {
+			err = cleanupErr
+		}
+		if s.onExit != nil {
+			if closeErr := normalizeInteractiveError(s.onExit()); err == nil {
+				err = closeErr
+			}
+		}
+		s.waitErr = err
+		close(s.done)
+	})
+}
+
+func (s *GDBSession) kill() error {
+	if s == nil {
+		return nil
+	}
+	if pid, err := readPIDFile(s.PidPath); err == nil && pid > 0 {
+		if err := killPID(pid); err != nil && !errors.Is(err, os.ErrProcessDone) {
+			return err
+		}
+		return nil
+	}
+	if s.Cmd != nil && s.Cmd.Process != nil {
+		err := s.Cmd.Process.Kill()
+		if errors.Is(err, os.ErrProcessDone) {
+			return nil
+		}
+		return err
+	}
+	return nil
+}
+
+func gdbTargetCloser(target any) func() error {
+	if closer, ok := target.(interface{ Close() error }); ok {
+		return closer.Close
+	}
+	return nil
+}
+
+func buildTerminalGDBCommand(gdb string, args []string, watchPath string, pidPath string, scriptPath string) string {
+	cleanup := []string{watchPath, pidPath}
+	if scriptPath != "" {
+		cleanup = append(cleanup, scriptPath)
+	}
+
+	var b strings.Builder
+	b.WriteString(shellCommand(gdb, args))
+	b.WriteString(" & child=$!; ")
+	b.WriteString("echo \"$child\" > ")
+	b.WriteString(shellQuote(pidPath))
+	b.WriteString("; ")
+	b.WriteString("wait \"$child\"; status=$?; ")
+	b.WriteString("rm -f")
+	for _, path := range cleanup {
+		b.WriteByte(' ')
+		b.WriteString(shellQuote(path))
+	}
+	b.WriteString("; exit \"$status\"")
+	return b.String()
+}
+
+func tempMarker(pattern string) (string, error) {
+	f, err := os.CreateTemp("", pattern)
+	if err != nil {
+		return "", err
+	}
+	path := f.Name()
+	if err := f.Close(); err != nil {
+		_ = os.Remove(path)
+		return "", err
+	}
+	return path, nil
+}
+
+func tempFilePath(pattern string) (string, error) {
+	f, err := os.CreateTemp("", pattern)
+	if err != nil {
+		return "", err
+	}
+	path := f.Name()
+	if err := f.Close(); err != nil {
+		_ = os.Remove(path)
+		return "", err
+	}
+	if err := os.Remove(path); err != nil {
+		return "", err
+	}
+	return path, nil
+}
+
+func readPIDFile(path string) (int, error) {
+	if path == "" {
+		return 0, os.ErrNotExist
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return 0, err
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
+	if err != nil {
+		return 0, err
+	}
+	return pid, nil
+}
+
+func killPID(pid int) error {
+	process, err := os.FindProcess(pid)
+	if err != nil {
+		return err
+	}
+	return process.Kill()
+}
+
+func removeIfExists(path string) error {
+	if path == "" {
+		return nil
+	}
+	err := os.Remove(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	return err
 }
 
 func commandExists(name string) bool {

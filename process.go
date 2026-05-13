@@ -224,7 +224,7 @@ func (p *ProcessTube) Interactive() error {
 }
 
 func (p *ProcessTube) interactiveWithIO(input io.Reader, output io.Writer) error {
-	return interactiveWithIO(p, p, input, output, p.closeWrite)
+	return interactiveWithIO(p, p, input, output, p.closeWrite, p.Close)
 }
 
 func (p *ProcessTube) closeWrite() error {

@@ -208,6 +208,10 @@ defer g.Close()
 _ = p.Interactive()
 ```
 
+When the GDB session exits, `gpwntools` now closes the attached local process as
+well, so a blocked `Interactive()` call can unwind cleanly. Pressing `Ctrl+C`
+inside `Interactive()` also closes the tube and restores the terminal state.
+
 To run GDB in the current terminal instead:
 
 ```go

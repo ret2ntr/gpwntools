@@ -134,7 +134,7 @@ func (r *RemoteTube) Interactive() error {
 }
 
 func (r *RemoteTube) interactiveWithIO(input io.Reader, output io.Writer) error {
-	return interactiveWithIO(r, r, input, output, r.closeWrite)
+	return interactiveWithIO(r, r, input, output, r.closeWrite, r.Close)
 }
 
 func (r *RemoteTube) closeWrite() error {

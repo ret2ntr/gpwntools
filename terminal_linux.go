@@ -28,7 +28,7 @@ func makeRawIfTerminal(input io.Reader) (func() error, error) {
 	rawState := *oldState
 	rawState.Iflag &^= syscall.IGNBRK | syscall.BRKINT | syscall.PARMRK | syscall.ISTRIP | syscall.INLCR | syscall.IGNCR | syscall.ICRNL | syscall.IXON
 	rawState.Oflag &^= syscall.OPOST
-	rawState.Lflag &^= syscall.ECHO | syscall.ECHONL | syscall.ICANON | syscall.ISIG | syscall.IEXTEN
+	rawState.Lflag &^= syscall.ECHO | syscall.ECHONL | syscall.ICANON | syscall.IEXTEN
 	rawState.Cflag &^= syscall.CSIZE | syscall.PARENB
 	rawState.Cflag |= syscall.CS8
 	rawState.Cc[syscall.VMIN] = 1
