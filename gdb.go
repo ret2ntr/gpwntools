@@ -1,6 +1,7 @@
 package gpwntools
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"net"
@@ -39,6 +40,7 @@ type GDBSession struct {
 	ScriptPath string
 	WatchPath  string
 	PidPath    string
+	ReadyPath  string
 
 	done       chan struct{}
 	onExit     func() error
@@ -183,7 +185,7 @@ func (s *GDBSession) Close() error {
 
 func (s *GDBSession) cleanup() error {
 	s.cleanupOnce.Do(func() {
-		for _, path := range []string{s.ScriptPath, s.WatchPath, s.PidPath} {
+		for _, path := range []string{s.ScriptPath, s.WatchPath, s.PidPath, s.ReadyPath} {
 			if err := removeIfExists(path); s.cleanupErr == nil && err != nil {
 				s.cleanupErr = err
 			}
@@ -233,14 +235,30 @@ func startGDBInTerminal(args []string, opts GDBOptions, scriptPath string, onExi
 		_ = removeIfExists(watchPath)
 		return nil, err
 	}
+	readyPath := ""
+	if scriptPath != "" {
+		readyPath, err = tempFilePath("gpwntools-gdb-ready-*")
+		if err != nil {
+			_ = removeIfExists(watchPath)
+			_ = removeIfExists(pidPath)
+			return nil, err
+		}
+		if err := prepareTerminalGDBScript(scriptPath, readyPath); err != nil {
+			_ = removeIfExists(watchPath)
+			_ = removeIfExists(pidPath)
+			_ = removeIfExists(readyPath)
+			return nil, err
+		}
+	}
 
-	command := buildTerminalGDBCommand(gdbPath(opts), args, watchPath, pidPath, scriptPath)
+	command := buildTerminalGDBCommand(gdbPath(opts), args, watchPath, pidPath, readyPath, scriptPath)
 
 	terminalArgs := append([]string{}, opts.Terminal[1:]...)
 	terminalArgs = append(terminalArgs, command)
 	cmd := exec.Command(opts.Terminal[0], terminalArgs...)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	launcherOutput := &terminalOutputBuffer{limit: 8192}
+	cmd.Stdout = launcherOutput
+	cmd.Stderr = launcherOutput
 	cmd.Env = append(os.Environ(), opts.Env...)
 	cmd.Dir = opts.Dir
 
@@ -249,6 +267,7 @@ func startGDBInTerminal(args []string, opts GDBOptions, scriptPath string, onExi
 		ScriptPath: scriptPath,
 		WatchPath:  watchPath,
 		PidPath:    pidPath,
+		ReadyPath:  readyPath,
 		done:       make(chan struct{}),
 		onExit:     onExit,
 	}
@@ -257,7 +276,25 @@ func startGDBInTerminal(args []string, opts GDBOptions, scriptPath string, onExi
 		_ = session.cleanup()
 		return nil, err
 	}
-	go session.reapLauncher()
+
+	launcherDone := make(chan error, 1)
+	go func() {
+		launcherDone <- cmd.Wait()
+	}()
+
+	startupTimeout := 500 * time.Millisecond
+	if readyPath != "" {
+		startupTimeout = 5 * time.Second
+	}
+	if err := session.waitForTerminalStartup(launcherDone, startupTimeout); err != nil {
+		_ = session.cleanup()
+		if output := launcherOutput.String(); output != "" {
+			err = fmt.Errorf("%w\nterminal output:\n%s", err, output)
+		}
+		return nil, err
+	}
+
+	go session.reapLauncher(launcherDone)
 	go session.waitForWatchPath()
 	return session, nil
 }
@@ -358,6 +395,9 @@ func GDBTerminalDefault() []string {
 	if commandExists("kitty") {
 		return GDBTerminalKitty()
 	}
+	if commandExists("ghostty") {
+		return GDBTerminalGhostty()
+	}
 	if commandExists("alacritty") {
 		return GDBTerminalAlacritty()
 	}
@@ -385,6 +425,11 @@ func GDBTerminalKonsole() []string {
 // GDBTerminalKitty returns a kitty launcher for GDB.
 func GDBTerminalKitty() []string {
 	return []string{"kitty", "sh", "-lc"}
+}
+
+// GDBTerminalGhostty returns a Ghostty launcher for GDB.
+func GDBTerminalGhostty() []string {
+	return []string{"ghostty", "-e", "sh", "-lc"}
 }
 
 // GDBTerminalAlacritty returns an Alacritty launcher for GDB.
@@ -469,12 +514,129 @@ func (s *GDBSession) waitForCommand() {
 	s.finish(err)
 }
 
-func (s *GDBSession) reapLauncher() {
-	if s.Cmd != nil {
-		if err := s.Cmd.Wait(); err != nil {
-			s.finish(err)
+type terminalOutputBuffer struct {
+	mu        sync.Mutex
+	buf       bytes.Buffer
+	limit     int
+	truncated bool
+}
+
+func (b *terminalOutputBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if b.limit <= 0 {
+		return len(p), nil
+	}
+	if remaining := b.limit - b.buf.Len(); remaining > 0 {
+		if len(p) > remaining {
+			_, _ = b.buf.Write(p[:remaining])
+			b.truncated = true
+		} else {
+			_, _ = b.buf.Write(p)
+		}
+	} else {
+		b.truncated = true
+	}
+	return len(p), nil
+}
+
+func (b *terminalOutputBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	output := strings.TrimSpace(b.buf.String())
+	if output == "" {
+		return ""
+	}
+	if b.truncated {
+		output += "\n[truncated]"
+	}
+	return output
+}
+
+func prepareTerminalGDBScript(scriptPath string, readyPath string) error {
+	data, err := os.ReadFile(scriptPath)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(scriptPath, []byte(wrapTerminalGDBScriptForReady(string(data), readyPath)), 0600)
+}
+
+func wrapTerminalGDBScriptForReady(script string, readyPath string) string {
+	readyCommand := "shell printf ready > " + shellQuote(readyPath)
+	var b strings.Builder
+
+	for _, command := range []string{"continue", "run", "start"} {
+		b.WriteString("define hook-")
+		b.WriteString(command)
+		b.WriteByte('\n')
+		b.WriteString(readyCommand)
+		b.WriteString("\nend\n")
+	}
+
+	b.WriteByte('\n')
+	b.WriteString(script)
+	if !strings.HasSuffix(script, "\n") {
+		b.WriteByte('\n')
+	}
+	b.WriteString(readyCommand)
+	b.WriteByte('\n')
+	return b.String()
+}
+
+func (s *GDBSession) reapLauncher(launcherDone <-chan error) {
+	if err := <-launcherDone; err != nil {
+		s.finish(err)
+	}
+}
+
+func (s *GDBSession) waitForTerminalStartup(launcherDone chan error, timeout time.Duration) error {
+	deadline := time.NewTimer(timeout)
+	defer deadline.Stop()
+
+	ticker := time.NewTicker(20 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		if terminalGDBStarted(s.WatchPath, s.PidPath, s.ReadyPath) {
+			return nil
+		}
+
+		select {
+		case err := <-launcherDone:
+			if terminalGDBStarted(s.WatchPath, s.PidPath, s.ReadyPath) {
+				launcherDone <- err
+				return nil
+			}
+			if err == nil {
+				return fmt.Errorf("gdb terminal %s exited before gdb started", s.Cmd.Path)
+			}
+			return fmt.Errorf("gdb terminal %s exited before gdb started: %w", s.Cmd.Path, err)
+		case <-ticker.C:
+		case <-deadline.C:
+			return nil
 		}
 	}
+}
+
+func terminalGDBStarted(watchPath string, pidPath string, readyPath string) bool {
+	if readyPath != "" {
+		if _, err := os.Stat(readyPath); err == nil {
+			return true
+		}
+		if _, err := os.Stat(watchPath); errors.Is(err, os.ErrNotExist) {
+			return true
+		}
+		return false
+	}
+	if _, err := os.Stat(pidPath); err == nil {
+		return true
+	}
+	if _, err := os.Stat(watchPath); errors.Is(err, os.ErrNotExist) {
+		return true
+	}
+	return false
 }
 
 func (s *GDBSession) waitForWatchPath() {
@@ -533,8 +695,11 @@ func gdbTargetCloser(target any) func() error {
 	return nil
 }
 
-func buildTerminalGDBCommand(gdb string, args []string, watchPath string, pidPath string, scriptPath string) string {
+func buildTerminalGDBCommand(gdb string, args []string, watchPath string, pidPath string, readyPath string, scriptPath string) string {
 	cleanup := []string{watchPath, pidPath}
+	if readyPath != "" {
+		cleanup = append(cleanup, readyPath)
+	}
 	if scriptPath != "" {
 		cleanup = append(cleanup, scriptPath)
 	}
