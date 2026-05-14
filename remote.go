@@ -128,13 +128,31 @@ func (r *RemoteTube) SetTimeout(timeout time.Duration) {
 	r.timeout = timeout
 }
 
-// Interactive connects stdin/stdout to the remote TCP connection.
+// Interactive connects stdin/stdout to the remote TCP connection without cbreak mode.
 func (r *RemoteTube) Interactive() error {
 	return r.interactiveWithIO(os.Stdin, os.Stdout)
 }
 
+// InteractiveRaw connects stdin/stdout to the remote TCP connection in cbreak mode.
+func (r *RemoteTube) InteractiveRaw() error {
+	return r.interactiveRawWithIO(os.Stdin, os.Stdout)
+}
+
+// InteractiveLine is a compatibility alias for Interactive.
+func (r *RemoteTube) InteractiveLine() error {
+	return r.Interactive()
+}
+
 func (r *RemoteTube) interactiveWithIO(input io.Reader, output io.Writer) error {
 	return interactiveWithIO(r, r, input, output, r.closeWrite, r.Close)
+}
+
+func (r *RemoteTube) interactiveRawWithIO(input io.Reader, output io.Writer) error {
+	return interactiveRawWithIO(r, r, input, output, r.closeWrite, r.Close)
+}
+
+func (r *RemoteTube) interactiveLineWithIO(input io.Reader, output io.Writer) error {
+	return r.interactiveWithIO(input, output)
 }
 
 func (r *RemoteTube) closeWrite() error {

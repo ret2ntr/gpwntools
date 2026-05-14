@@ -178,6 +178,14 @@ if err != nil {
 _ = p.Interactive()
 ```
 
+`Interactive()` keeps terminal input in line mode, so single keystrokes such as
+`c` or `ni` are not forwarded before Enter while debugging in a separate GDB
+terminal. Use raw mode when you want each keystroke forwarded immediately:
+
+```go
+_ = p.InteractiveRaw()
+```
+
 ```go
 p, err := gpwntools.ProcessWithOptions([]string{"./chall"}, gpwntools.ProcessOptions{
 	Cwd: "./target",

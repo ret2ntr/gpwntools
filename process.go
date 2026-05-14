@@ -222,13 +222,31 @@ func (p *ProcessTube) Wait() error {
 	return p.waitErr
 }
 
-// Interactive connects stdin/stdout to the local process.
+// Interactive connects stdin/stdout to the local process without cbreak mode.
 func (p *ProcessTube) Interactive() error {
 	return p.interactiveWithIO(os.Stdin, os.Stdout)
 }
 
+// InteractiveRaw connects stdin/stdout to the local process in cbreak mode.
+func (p *ProcessTube) InteractiveRaw() error {
+	return p.interactiveRawWithIO(os.Stdin, os.Stdout)
+}
+
+// InteractiveLine is a compatibility alias for Interactive.
+func (p *ProcessTube) InteractiveLine() error {
+	return p.Interactive()
+}
+
 func (p *ProcessTube) interactiveWithIO(input io.Reader, output io.Writer) error {
 	return interactiveWithIO(p, p, input, output, p.closeWrite, p.Close)
+}
+
+func (p *ProcessTube) interactiveRawWithIO(input io.Reader, output io.Writer) error {
+	return interactiveRawWithIO(p, p, input, output, p.closeWrite, p.Close)
+}
+
+func (p *ProcessTube) interactiveLineWithIO(input io.Reader, output io.Writer) error {
+	return p.interactiveWithIO(input, output)
 }
 
 func (p *ProcessTube) closeWrite() error {
