@@ -226,28 +226,23 @@ defer g.Close()
 _ = p.Interactive()
 ```
 
+To start a new process under gdbserver while keeping target IO as a tube,
+similar to pwntools `gdb.debug(...).interactive()`:
+
+```go
+p, g, err := gpwntools.GDBDebug([]string{"./chall"}, "break main\ncontinue")
+if err != nil {
+	panic(err)
+}
+defer g.Close()
+defer p.Close()
+
+_ = p.Interactive()
+```
+
 When the GDB session exits, `gpwntools` now closes the attached local process as
 well, so a blocked `Interactive()` call can unwind cleanly. Pressing `Ctrl+C`
 inside `Interactive()` also closes the tube and restores the terminal state.
-
-To run GDB in the current terminal instead:
-
-```go
-g, err := p.GDBHere("break main\ncontinue")
-if err != nil {
-	panic(err)
-}
-defer g.Close()
-```
-
-```go
-g, err := gpwntools.GDBDebugHere([]string{"./chall", "AAAA"}, "break main\nrun")
-if err != nil {
-	panic(err)
-}
-defer g.Close()
-_ = g.Wait()
-```
 
 ```go
 g, err := gpwntools.GDBRemoteAddress("127.0.0.1:1234", "./chall", "continue")

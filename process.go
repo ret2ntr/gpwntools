@@ -62,6 +62,10 @@ func ProcessWithOptions(argv []string, opts ProcessOptions) (*ProcessTube, error
 		return nil, err
 	}
 
+	return startProcessCommand(cmd, opts)
+}
+
+func startProcessCommand(cmd *exec.Cmd, opts ProcessOptions) (*ProcessTube, error) {
 	stdin, outputReader, outputWriter, err := processIO(cmd, opts)
 	if err != nil {
 		return nil, err
@@ -193,11 +197,6 @@ func (p *ProcessTube) GDB(script string) (*GDBSession, error) {
 	return GDBAttach(p, script)
 }
 
-// GDBHere attaches gdb to the process in the current terminal.
-func (p *ProcessTube) GDBHere(script string) (*GDBSession, error) {
-	return GDBAttachHere(p, script)
-}
-
 func (p *ProcessTube) Close() error {
 	p.closeOnce.Do(func() {
 		if err := normalizeInteractiveError(p.stdin.Close()); err != nil {
@@ -258,6 +257,10 @@ func (p *ProcessTube) bufferedReader() *bufio.Reader {
 		p.reader = bufio.NewReader(p.output)
 	}
 	return p.reader
+}
+
+func (p *ProcessTube) filterOutput(r io.Reader) {
+	p.reader = bufio.NewReader(r)
 }
 
 func processIO(cmd *exec.Cmd, opts ProcessOptions) (io.WriteCloser, processOutput, io.Closer, error) {

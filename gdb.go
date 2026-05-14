@@ -1,9 +1,11 @@
 package gpwntools
 
 import (
+	"bufio"
 	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"os/exec"
@@ -13,7 +15,10 @@ import (
 	"time"
 )
 
-const defaultGDBPath = "gdb"
+const (
+	defaultGDBPath       = "gdb"
+	defaultGDBServerPath = "gdbserver"
+)
 
 // GDBOptions configures how gdb is started.
 type GDBOptions struct {
@@ -32,6 +37,18 @@ type GDBOptions struct {
 	Env []string
 	// Dir sets the working directory for the gdb process.
 	Dir string
+}
+
+// GDBDebugOptions configures GDBDebugWithOptions.
+type GDBDebugOptions struct {
+	// Process configures the target process whose IO is returned as a tube.
+	Process ProcessOptions
+	// GDB configures the debugger session.
+	GDB GDBOptions
+	// GDBServerPath is the gdbserver executable path. It defaults to "gdbserver".
+	GDBServerPath string
+	// GDBServerArgs are extra arguments passed to gdbserver before the listen address.
+	GDBServerArgs []string
 }
 
 // GDBSession is a running gdb process.
@@ -66,11 +83,6 @@ func GDBAttach(target any, script string) (*GDBSession, error) {
 	})
 }
 
-// GDBAttachHere starts gdb in the current terminal and attaches to the target.
-func GDBAttachHere(target any, script string) (*GDBSession, error) {
-	return GDBAttachWithOptions(target, GDBOptions{Script: script})
-}
-
 // GDBAttachProcess starts gdb and attaches it to a ProcessTube.
 func GDBAttachProcess(p *ProcessTube, script string) (*GDBSession, error) {
 	return GDBAttach(p, script)
@@ -90,25 +102,20 @@ func GDBAttachWithOptions(target any, opts GDBOptions) (*GDBSession, error) {
 	return startGDB(args, opts, scriptPath, gdbTargetCloser(target))
 }
 
-// GDBDebug starts gdb for a new local process, equivalent to "gdb --args ...".
-func GDBDebug(argv []string, script string) (*GDBSession, error) {
+// GDBDebugSession starts gdb for a new local process, equivalent to "gdb --args ...".
+func GDBDebugSession(argv []string, script string) (*GDBSession, error) {
 	terminal, err := contextGDBTerminal()
 	if err != nil {
 		return nil, err
 	}
-	return GDBDebugWithOptions(argv, GDBOptions{
+	return GDBDebugSessionWithOptions(argv, GDBOptions{
 		Script:   script,
 		Terminal: terminal,
 	})
 }
 
-// GDBDebugHere starts gdb for a new local process in the current terminal.
-func GDBDebugHere(argv []string, script string) (*GDBSession, error) {
-	return GDBDebugWithOptions(argv, GDBOptions{Script: script})
-}
-
-// GDBDebugWithOptions starts gdb for a new local process with explicit options.
-func GDBDebugWithOptions(argv []string, opts GDBOptions) (*GDBSession, error) {
+// GDBDebugSessionWithOptions starts gdb for a new local process with explicit options.
+func GDBDebugSessionWithOptions(argv []string, opts GDBOptions) (*GDBSession, error) {
 	if len(argv) == 0 {
 		return nil, errors.New("gdb debug requires at least one argument")
 	}
@@ -118,6 +125,50 @@ func GDBDebugWithOptions(argv []string, opts GDBOptions) (*GDBSession, error) {
 	}
 	args := buildGDBDebugArgs(argv, opts, scriptPath)
 	return startGDB(args, opts, scriptPath, nil)
+}
+
+// GDBDebug starts a local process under gdbserver, connects gdb in another
+// terminal, and returns both the process tube and gdb session.
+func GDBDebug(argv []string, script string) (*ProcessTube, *GDBSession, error) {
+	terminal, err := contextGDBTerminal()
+	if err != nil {
+		return nil, nil, err
+	}
+	return GDBDebugWithOptions(argv, GDBDebugOptions{
+		GDB: GDBOptions{
+			Script:   script,
+			Terminal: terminal,
+		},
+	})
+}
+
+// GDBDebugWithOptions starts a local process under gdbserver with retained tube
+// IO and connects gdb using explicit process and debugger options.
+func GDBDebugWithOptions(argv []string, opts GDBDebugOptions) (*ProcessTube, *GDBSession, error) {
+	if len(argv) == 0 {
+		return nil, nil, errors.New("gdb debug process requires at least one argument")
+	}
+
+	p, address, err := startGDBServer(argv, opts)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	gdbOpts := opts.GDB
+	if gdbOpts.Binary == "" {
+		gdbOpts.Binary = gdbDebugProcessBinary(argv[0])
+	}
+	if gdbOpts.Dir == "" {
+		gdbOpts.Dir = opts.Process.Cwd
+	}
+	gdbOpts.Script = joinGDBScript("set breakpoint pending on", gdbOpts.Script)
+
+	g, err := startGDBRemote(address, gdbOpts, p.Close)
+	if err != nil {
+		_ = p.Close()
+		return nil, nil, err
+	}
+	return p, g, nil
 }
 
 // GDBRemote starts gdb and connects to a gdbserver at host:port.
@@ -138,16 +189,12 @@ func GDBRemoteAddress(address string, binary string, script string) (*GDBSession
 	})
 }
 
-// GDBRemoteAddressHere starts gdb in the current terminal and connects to a gdbserver address.
-func GDBRemoteAddressHere(address string, binary string, script string) (*GDBSession, error) {
-	return GDBRemoteAddressWithOptions(address, GDBOptions{
-		Binary: binary,
-		Script: script,
-	})
-}
-
 // GDBRemoteAddressWithOptions starts gdb and connects to a gdbserver address.
 func GDBRemoteAddressWithOptions(address string, opts GDBOptions) (*GDBSession, error) {
+	return startGDBRemote(address, opts, nil)
+}
+
+func startGDBRemote(address string, opts GDBOptions, onExit func() error) (*GDBSession, error) {
 	if strings.TrimSpace(address) == "" {
 		return nil, errors.New("gdb remote requires an address")
 	}
@@ -157,7 +204,7 @@ func GDBRemoteAddressWithOptions(address string, opts GDBOptions) (*GDBSession, 
 		return nil, err
 	}
 	args := buildGDBRemoteArgs(opts, scriptPath)
-	return startGDB(args, opts, scriptPath, nil)
+	return startGDB(args, opts, scriptPath, onExit)
 }
 
 // Wait waits for gdb to exit and removes any temporary script file.
@@ -328,6 +375,130 @@ func writeGDBScript(script string) (string, error) {
 	return path, nil
 }
 
+func startGDBServer(argv []string, opts GDBDebugOptions) (*ProcessTube, string, error) {
+	gdbserverPath := opts.GDBServerPath
+	if gdbserverPath == "" {
+		gdbserverPath = defaultGDBServerPath
+	}
+
+	args := []string{"--once", "--no-startup-with-shell"}
+	args = append(args, opts.GDBServerArgs...)
+	args = append(args, "127.0.0.1:0")
+	args = append(args, argv...)
+
+	cmd := exec.Command(gdbserverPath, args...)
+	cmd.Dir = opts.Process.Cwd
+	if opts.Process.ClearEnv || len(opts.Process.Env) > 0 {
+		cmd.Env = processTargetEnv(opts.Process)
+	}
+
+	p, err := startProcessCommand(cmd, opts.Process)
+	if err != nil {
+		return nil, "", err
+	}
+
+	address, err := waitForGDBServerAddress(p, 5*time.Second)
+	if err != nil {
+		_ = p.Close()
+		return nil, "", err
+	}
+	p.filterOutput(newGDBServerOutputFilter(p.bufferedReader()))
+	return p, address, nil
+}
+
+func waitForGDBServerAddress(p *ProcessTube, timeout time.Duration) (string, error) {
+	const marker = "Listening on port "
+
+	received, err := p.RecvUntilTimeout([]byte(marker), timeout)
+	if err != nil {
+		return "", fmt.Errorf("gdbserver did not report a listening port after %q: %w", string(received), err)
+	}
+	line, err := p.RecvLineTimeout(timeout)
+	if err != nil {
+		return "", fmt.Errorf("gdbserver did not finish listening port line after %q: %w", string(received), err)
+	}
+	port := strings.TrimSpace(string(line))
+	if _, err := strconv.Atoi(port); err != nil {
+		return "", fmt.Errorf("gdbserver reported invalid listening port %q", port)
+	}
+	return net.JoinHostPort("127.0.0.1", port), nil
+}
+
+type gdbServerOutputFilter struct {
+	r         *bufio.Reader
+	lineStart bool
+	pending   []byte
+}
+
+func newGDBServerOutputFilter(r *bufio.Reader) io.Reader {
+	return &gdbServerOutputFilter{
+		r:         r,
+		lineStart: true,
+	}
+}
+
+func (f *gdbServerOutputFilter) Read(p []byte) (int, error) {
+	for len(f.pending) == 0 {
+		if err := f.readNext(); err != nil {
+			return 0, err
+		}
+	}
+	n := copy(p, f.pending)
+	f.pending = f.pending[n:]
+	return n, nil
+}
+
+func (f *gdbServerOutputFilter) readNext() error {
+	b, err := f.r.ReadByte()
+	if err != nil {
+		return err
+	}
+
+	if f.lineStart {
+		f.lineStart = false
+		if b == 'R' {
+			_ = f.discardKnownLine([]byte{b}, "Remote debugging from host ")
+			return nil
+		}
+	}
+
+	if b == '\n' {
+		f.lineStart = true
+	}
+	f.pending = append(f.pending, b)
+	return nil
+}
+
+func (f *gdbServerOutputFilter) discardKnownLine(prefix []byte, statusPrefix string) bool {
+	for len(prefix) < len(statusPrefix) {
+		b, err := f.r.ReadByte()
+		if err != nil {
+			f.pending = append(f.pending, prefix...)
+			return false
+		}
+		prefix = append(prefix, b)
+		if b != statusPrefix[len(prefix)-1] {
+			f.pending = append(f.pending, prefix...)
+			if b == '\n' {
+				f.lineStart = true
+			}
+			return false
+		}
+	}
+
+	for {
+		b, err := f.r.ReadByte()
+		if err != nil {
+			f.lineStart = true
+			return true
+		}
+		if b == '\n' {
+			f.lineStart = true
+			return true
+		}
+	}
+}
+
 func buildGDBAttachArgs(pid int, opts GDBOptions, scriptPath string) []string {
 	args := buildGDBBaseArgs(opts)
 	if opts.Binary != "" {
@@ -371,6 +542,16 @@ func gdbPath(opts GDBOptions) string {
 		return defaultGDBPath
 	}
 	return opts.Path
+}
+
+func gdbDebugProcessBinary(argv0 string) string {
+	if strings.Contains(argv0, "/") {
+		return argv0
+	}
+	if resolved, err := exec.LookPath(argv0); err == nil {
+		return resolved
+	}
+	return argv0
 }
 
 func contextGDBTerminal() ([]string, error) {

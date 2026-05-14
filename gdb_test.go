@@ -1,6 +1,7 @@
 package gpwntools
 
 import (
+	"bufio"
 	"fmt"
 	"io"
 	"os"
@@ -112,18 +113,18 @@ func TestGDBTerminalWaitsForScriptReady(t *testing.T) {
 	}
 }
 
-func TestGDBDebugWithOptionsTerminalWaitsForScriptReady(t *testing.T) {
+func TestGDBDebugSessionWithOptionsTerminalWaitsForScriptReady(t *testing.T) {
 	scriptCopy := t.TempDir() + "/debug-script.gdb"
 	fakeGDB := writeReadyFakeGDB(t, 0)
 
-	session, err := GDBDebugWithOptions([]string{"/bin/true", "arg"}, GDBOptions{
+	session, err := GDBDebugSessionWithOptions([]string{"/bin/true", "arg"}, GDBOptions{
 		Path:     fakeGDB,
 		Script:   "break main\nrun",
 		Terminal: []string{"sh", "-lc"},
 		Env:      []string{"GPWNTOOLS_FAKE_GDB_SCRIPT_COPY=" + scriptCopy},
 	})
 	if err != nil {
-		t.Fatalf("GDBDebugWithOptions failed: %v", err)
+		t.Fatalf("GDBDebugSessionWithOptions failed: %v", err)
 	}
 	if err := session.Wait(); err != nil {
 		t.Fatalf("Wait failed: %v", err)
@@ -135,6 +136,64 @@ func TestGDBDebugWithOptionsTerminalWaitsForScriptReady(t *testing.T) {
 	}
 	if !strings.Contains(copied, "\nbreak main\nrun\n") {
 		t.Fatalf("debug script missing original commands:\n%s", copied)
+	}
+}
+
+func TestGDBDebugWithOptionsReturnsTubeAndSession(t *testing.T) {
+	scriptCopy := t.TempDir() + "/debug-process-script.gdb"
+	fakeGDB := writeReadyFakeGDB(t, 0)
+	fakeGDBServer := writeFakeGDBServer(t, "31337")
+
+	p, g, err := GDBDebugWithOptions([]string{"sh", "-c", "sleep 1"}, GDBDebugOptions{
+		Process: ProcessOptions{
+			DisablePTY: true,
+		},
+		GDB: GDBOptions{
+			Path:     fakeGDB,
+			Script:   "break main\ncontinue",
+			Terminal: []string{"sh", "-lc"},
+			Env:      []string{"GPWNTOOLS_FAKE_GDB_SCRIPT_COPY=" + scriptCopy},
+		},
+		GDBServerPath: fakeGDBServer,
+	})
+	if err != nil {
+		t.Fatalf("GDBDebugWithOptions failed: %v", err)
+	}
+	if p == nil {
+		t.Fatal("process tube is nil")
+	}
+	if g == nil {
+		t.Fatal("gdb session is nil")
+	}
+	t.Cleanup(func() {
+		_ = g.Close()
+		_ = p.Close()
+	})
+
+	copied := readFile(t, scriptCopy)
+	if !strings.Contains(copied, "\ntarget remote 127.0.0.1:31337\nset breakpoint pending on\nbreak main\ncontinue\n") {
+		t.Fatalf("debug process script missing target remote or original commands:\n%s", copied)
+	}
+}
+
+func TestGDBServerOutputFilterSuppressesStatusLine(t *testing.T) {
+	input := "" +
+		"target output\n" +
+		"Remote debugging from host 127.0.0.1, port 57174\n" +
+		"Remote debug text from target\n" +
+		"done\n"
+
+	got, err := io.ReadAll(newGDBServerOutputFilter(bufio.NewReader(strings.NewReader(input))))
+	if err != nil {
+		t.Fatalf("ReadAll failed: %v", err)
+	}
+
+	want := "" +
+		"target output\n" +
+		"Remote debug text from target\n" +
+		"done\n"
+	if string(got) != want {
+		t.Fatalf("filtered output = %q, want %q", got, want)
 	}
 }
 
@@ -250,6 +309,16 @@ if [ -n "$script" ]; then
 		esac
 	done < "$script"
 fi
+`)
+}
+
+func writeFakeGDBServer(t *testing.T, port string) string {
+	t.Helper()
+
+	return writeFakeGDB(t, `#!/bin/sh
+printf 'Process created; pid = 1234\n' >&2
+printf 'Listening on port `+port+`\n' >&2
+sleep 60
 `)
 }
 
