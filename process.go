@@ -17,11 +17,12 @@ type ProcessTube struct {
 	output processOutput
 	reader *bufio.Reader
 
-	closeOnce sync.Once
-	closeErr  error
-	done      chan struct{}
-	waitErr   error
-	timeout   time.Duration
+	closeOnce     sync.Once
+	closeErr      error
+	done          chan struct{}
+	waitErr       error
+	timeout       time.Duration
+	killOnTimeout bool
 }
 
 type processOutput interface {
@@ -84,12 +85,13 @@ func startProcessCommand(cmd *exec.Cmd, opts ProcessOptions) (*ProcessTube, erro
 	}
 
 	p := &ProcessTube{
-		cmd:     cmd,
-		stdin:   stdin,
-		output:  outputReader,
-		reader:  bufio.NewReader(outputReader),
-		done:    make(chan struct{}),
-		timeout: contextTimeout(),
+		cmd:           cmd,
+		stdin:         stdin,
+		output:        outputReader,
+		reader:        bufio.NewReader(outputReader),
+		done:          make(chan struct{}),
+		timeout:       contextTimeout(),
+		killOnTimeout: Context.KillOnTimeout,
 	}
 
 	go func() {
@@ -146,9 +148,13 @@ func (p *ProcessTube) Recv(n int) ([]byte, error) {
 
 // RecvTimeout reads up to n bytes with a per-call timeout.
 func (p *ProcessTube) RecvTimeout(n int, timeout time.Duration) ([]byte, error) {
-	return recvWithDeadline(p.output, timeout, func() ([]byte, error) {
+	out, err := recvWithDeadline(p.output, timeout, func() ([]byte, error) {
 		return Recv(p.bufferedReader(), n)
 	})
+	if err != nil && errors.Is(err, os.ErrDeadlineExceeded) && p.killOnTimeout {
+		_ = p.Close()
+	}
+	return out, err
 }
 
 // RecvLine reads from the process stdout/stderr stream until a newline is seen.
@@ -165,18 +171,22 @@ func (p *ProcessTube) RecvLineTimeout(timeout time.Duration) ([]byte, error) {
 }
 
 // RecvUntil reads from the process stdout/stderr stream until delim is seen.
-func (p *ProcessTube) RecvUntil(delim []byte) ([]byte, error) {
+func (p *ProcessTube) RecvUntil(delim []byte, drop ...bool) ([]byte, error) {
 	if p.timeout <= 0 {
-		return RecvUntil(p.bufferedReader(), delim)
+		return RecvUntil(p.bufferedReader(), delim, drop...)
 	}
-	return p.RecvUntilTimeout(delim, p.timeout)
+	return p.RecvUntilTimeout(delim, p.timeout, drop...)
 }
 
 // RecvUntilTimeout reads until delim is seen with a per-call timeout.
-func (p *ProcessTube) RecvUntilTimeout(delim []byte, timeout time.Duration) ([]byte, error) {
-	return recvWithDeadline(p.output, timeout, func() ([]byte, error) {
-		return RecvUntil(p.bufferedReader(), delim)
+func (p *ProcessTube) RecvUntilTimeout(delim []byte, timeout time.Duration, drop ...bool) ([]byte, error) {
+	out, err := recvWithDeadline(p.output, timeout, func() ([]byte, error) {
+		return RecvUntil(p.bufferedReader(), delim, drop...)
 	})
+	if err != nil && errors.Is(err, os.ErrDeadlineExceeded) && p.killOnTimeout {
+		_ = p.Close()
+	}
+	return out, err
 }
 
 // SetTimeout sets the default timeout used by Recv, RecvLine, and RecvUntil.
@@ -263,6 +273,49 @@ func (p *ProcessTube) filterOutput(r io.Reader) {
 	p.reader = bufio.NewReader(r)
 }
 
+type processOutputNormalizer struct {
+	r       io.Reader
+	pending []byte
+}
+
+func newProcessOutputNormalizer(r io.Reader) io.Reader {
+	return &processOutputNormalizer{r: r}
+}
+
+func (n *processOutputNormalizer) Read(p []byte) (int, error) {
+	for len(n.pending) == 0 {
+		buf := make([]byte, len(p))
+		if len(buf) == 0 {
+			buf = make([]byte, 1)
+		}
+		nread, err := n.r.Read(buf)
+		if nread > 0 {
+			n.pending = append(n.pending, normalizeCarriageReturns(buf[:nread])...)
+		}
+		if err != nil {
+			if len(n.pending) == 0 {
+				return 0, err
+			}
+			break
+		}
+	}
+
+	nread := copy(p, n.pending)
+	n.pending = n.pending[nread:]
+	return nread, nil
+}
+
+func normalizeCarriageReturns(b []byte) []byte {
+	out := make([]byte, 0, len(b))
+	for i := 0; i < len(b); i++ {
+		if b[i] == '\r' && i+1 < len(b) && b[i+1] == '\n' {
+			continue
+		}
+		out = append(out, b[i])
+	}
+	return out
+}
+
 func processIO(cmd *exec.Cmd, opts ProcessOptions) (io.WriteCloser, processOutput, io.Closer, error) {
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -270,7 +323,7 @@ func processIO(cmd *exec.Cmd, opts ProcessOptions) (io.WriteCloser, processOutpu
 	}
 
 	if Context.PTY && !opts.DisablePTY {
-		outputReader, outputWriter, err := openProcessPTY()
+		outputReader, outputWriter, err := openProcessPTYWithRaw(true)
 		if err != nil {
 			_ = stdin.Close()
 			return nil, nil, nil, err

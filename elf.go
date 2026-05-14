@@ -19,6 +19,18 @@ type ELFFile struct {
 	file     *elf.File
 }
 
+// ELFSearchOptions controls where SearchWithOptions looks for bytes.
+type ELFSearchOptions struct {
+	// Section restricts the search to one named ELF section, such as ".text".
+	Section string
+	// Readable, Writable, and Executable restrict program segment searches by
+	// PT_LOAD permissions. For section searches, they are matched against the
+	// closest section flags available in the ELF metadata.
+	Readable   bool
+	Writable   bool
+	Executable bool
+}
+
 // ELF parses an ELF binary and returns common symbol, GOT, PLT, and section addresses.
 func ELF(path string) (*ELFFile, error) {
 	f, err := elf.Open(path)
@@ -49,24 +61,35 @@ func ELF(path string) (*ELFFile, error) {
 	return out, nil
 }
 
-// SetBase sets the runtime base address used by Resolve and Search.
+// SetBase sets the runtime base address and rebases public address fields/maps.
 func (e *ELFFile) SetBase(base uint64) {
+	if e == nil || e.Base == base {
+		return
+	}
+	oldBase := e.Base
+	if e.Entry != 0 {
+		e.Entry = rebaseAddress(e.Entry, oldBase, base)
+	}
+	rebaseAddressMap(e.Symbols, oldBase, base)
+	rebaseAddressMap(e.GOT, oldBase, base)
+	rebaseAddressMap(e.PLT, oldBase, base)
+	rebaseAddressMap(e.Sections, oldBase, base)
 	e.Base = base
 }
 
 // Resolve returns the runtime address for a symbol, GOT/PLT entry, or section.
 func (e *ELFFile) Resolve(name string) (uint64, bool) {
 	if addr, ok := e.Symbols[name]; ok {
-		return e.Base + addr, true
+		return addr, true
 	}
 	if addr, ok := e.GOT[name]; ok {
-		return e.Base + addr, true
+		return addr, true
 	}
 	if addr, ok := e.PLT[name]; ok {
-		return e.Base + addr, true
+		return addr, true
 	}
 	if addr, ok := e.Sections[name]; ok {
-		return e.Base + addr, true
+		return addr, true
 	}
 	return 0, false
 }
@@ -112,11 +135,44 @@ func (e *ELFFile) SectionAddr(name string) (uint64, bool) {
 
 // Search returns virtual addresses where needle appears in loadable segments.
 func (e *ELFFile) Search(needle []byte) ([]uint64, error) {
+	return e.SearchWithOptions(needle, ELFSearchOptions{})
+}
+
+// SearchExecutable returns virtual addresses where needle appears in executable loadable segments.
+func (e *ELFFile) SearchExecutable(needle []byte) ([]uint64, error) {
+	return e.SearchWithOptions(needle, ELFSearchOptions{Executable: true})
+}
+
+// SearchSection returns virtual addresses where needle appears in a named ELF section.
+func (e *ELFFile) SearchSection(section string, needle []byte) ([]uint64, error) {
+	return e.SearchWithOptions(needle, ELFSearchOptions{Section: section})
+}
+
+// SearchOne returns the first Search result.
+func (e *ELFFile) SearchOne(needle []byte) (uint64, error) {
+	return firstSearchResult(e.Search(needle))
+}
+
+// SearchExecutableOne returns the first SearchExecutable result.
+func (e *ELFFile) SearchExecutableOne(needle []byte) (uint64, error) {
+	return firstSearchResult(e.SearchExecutable(needle))
+}
+
+// SearchSectionOne returns the first SearchSection result.
+func (e *ELFFile) SearchSectionOne(section string, needle []byte) (uint64, error) {
+	return firstSearchResult(e.SearchSection(section, needle))
+}
+
+// SearchWithOptions returns virtual addresses where needle appears in matching ELF areas.
+func (e *ELFFile) SearchWithOptions(needle []byte, opts ELFSearchOptions) ([]uint64, error) {
 	if len(needle) == 0 {
 		return nil, errors.New("search needle must not be empty")
 	}
 	if e == nil || e.file == nil {
 		return nil, errors.New("ELF file is closed")
+	}
+	if opts.Section != "" {
+		return e.searchSection(opts.Section, needle, opts)
 	}
 
 	var addrs []uint64
@@ -124,23 +180,99 @@ func (e *ELFFile) Search(needle []byte) ([]uint64, error) {
 		if prog.Type != elf.PT_LOAD || prog.Filesz == 0 {
 			continue
 		}
+		if !programMatchesSearchOptions(prog, opts) {
+			continue
+		}
 		data := make([]byte, prog.Filesz)
 		if _, err := prog.ReadAt(data, 0); err != nil {
 			return nil, fmt.Errorf("read program segment %#x: %w", prog.Vaddr, err)
 		}
 
-		base := 0
-		for {
-			idx := bytes.Index(data[base:], needle)
-			if idx < 0 {
-				break
-			}
-			offset := base + idx
-			addrs = append(addrs, e.Base+prog.Vaddr+uint64(offset))
-			base = offset + 1
-		}
+		addrs = append(addrs, searchBytes(data, needle, e.Base+prog.Vaddr)...)
 	}
 	return addrs, nil
+}
+
+func (e *ELFFile) searchSection(name string, needle []byte, opts ELFSearchOptions) ([]uint64, error) {
+	section := e.file.Section(name)
+	if section == nil {
+		return nil, fmt.Errorf("ELF section %q not found", name)
+	}
+	if !sectionMatchesSearchOptions(section, opts) {
+		return nil, nil
+	}
+	data, err := section.Data()
+	if err != nil {
+		return nil, fmt.Errorf("read section %q: %w", name, err)
+	}
+	return searchBytes(data, needle, e.Base+section.Addr), nil
+}
+
+func searchBytes(data []byte, needle []byte, baseAddr uint64) []uint64 {
+	var addrs []uint64
+	base := 0
+	for {
+		idx := bytes.Index(data[base:], needle)
+		if idx < 0 {
+			break
+		}
+		offset := base + idx
+		addrs = append(addrs, baseAddr+uint64(offset))
+		base = offset + 1
+	}
+	return addrs
+}
+
+func programMatchesSearchOptions(prog *elf.Prog, opts ELFSearchOptions) bool {
+	if opts.Readable && prog.Flags&elf.PF_R == 0 {
+		return false
+	}
+	if opts.Writable && prog.Flags&elf.PF_W == 0 {
+		return false
+	}
+	if opts.Executable && prog.Flags&elf.PF_X == 0 {
+		return false
+	}
+	return true
+}
+
+func sectionMatchesSearchOptions(section *elf.Section, opts ELFSearchOptions) bool {
+	if opts.Readable && section.Flags&elf.SHF_ALLOC == 0 {
+		return false
+	}
+	if opts.Writable && section.Flags&elf.SHF_WRITE == 0 {
+		return false
+	}
+	if opts.Executable && section.Flags&elf.SHF_EXECINSTR == 0 {
+		return false
+	}
+	return true
+}
+
+func firstSearchResult(addrs []uint64, err error) (uint64, error) {
+	if err != nil {
+		return 0, err
+	}
+	if len(addrs) == 0 {
+		return 0, errors.New("search needle not found")
+	}
+	return addrs[0], nil
+}
+
+func rebaseAddressMap(addrs map[string]uint64, oldBase uint64, newBase uint64) {
+	for name, addr := range addrs {
+		addrs[name] = rebaseAddress(addr, oldBase, newBase)
+	}
+}
+
+func rebaseAddress(addr uint64, oldBase uint64, newBase uint64) uint64 {
+	if oldBase == 0 {
+		return addr + newBase
+	}
+	if addr >= oldBase {
+		return addr - oldBase + newBase
+	}
+	return addr + newBase
 }
 
 func (e *ELFFile) loadSymbols(f *elf.File) {

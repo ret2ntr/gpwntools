@@ -22,6 +22,8 @@ type ContextConfig struct {
 	Terminal []string
 	// Timeout is copied into newly-created tubes as their default recv timeout.
 	Timeout time.Duration
+	// KillOnTimeout makes newly-created process tubes terminate the child process when a recv timeout occurs.
+	KillOnTimeout bool
 	// PTY makes local Process stdout/stderr use a pseudo-terminal by default.
 	PTY bool
 }

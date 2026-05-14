@@ -48,7 +48,8 @@ func SendLineAfter(r io.Reader, w io.Writer, delim []byte, data []byte) ([]byte,
 	return received, SendLine(w, data)
 }
 
-// Recv reads up to n bytes from a target.
+// Recv reads up to n bytes from a target. It keeps reading until n bytes are
+// received, or until the underlying reader returns an error.
 func Recv(r io.Reader, n int) ([]byte, error) {
 	if n < 0 {
 		return nil, errors.New("recv size must be non-negative")
@@ -58,8 +59,18 @@ func Recv(r io.Reader, n int) ([]byte, error) {
 	}
 
 	buf := make([]byte, n)
-	read, err := r.Read(buf)
-	return buf[:read], err
+	read := 0
+	for read < n {
+		nread, err := r.Read(buf[read:])
+		read += nread
+		if err != nil {
+			return buf[:read], err
+		}
+		if nread == 0 {
+			return buf[:read], io.ErrNoProgress
+		}
+	}
+	return buf, nil
 }
 
 // RecvTimeout reads up to n bytes from a deadline-capable target.
@@ -83,8 +94,8 @@ func RecvLineTimeout(r io.Reader, timeout time.Duration) ([]byte, error) {
 	return RecvUntilTimeout(r, []byte("\n"), timeout)
 }
 
-// RecvUntil reads until delim is seen. The returned data includes delim.
-func RecvUntil(r io.Reader, delim []byte) ([]byte, error) {
+// RecvUntil reads until delim is seen. The returned data includes delim unless drop is true.
+func RecvUntil(r io.Reader, delim []byte, drop ...bool) ([]byte, error) {
 	if len(delim) == 0 {
 		return nil, errors.New("recvuntil delimiter must not be empty")
 	}
@@ -103,20 +114,27 @@ func RecvUntil(r io.Reader, delim []byte) ([]byte, error) {
 
 		out = append(out, b)
 		if bytes.HasSuffix(out, delim) {
+			if shouldDropDelimiter(drop) {
+				return out[:len(out)-len(delim)], nil
+			}
 			return out, nil
 		}
 	}
 }
 
 // RecvUntilTimeout reads until delim is seen from a deadline-capable target.
-func RecvUntilTimeout(r io.Reader, delim []byte, timeout time.Duration) ([]byte, error) {
+func RecvUntilTimeout(r io.Reader, delim []byte, timeout time.Duration, drop ...bool) ([]byte, error) {
 	var out []byte
 	err := withReadDeadline(r, timeout, func() error {
 		var err error
-		out, err = RecvUntil(r, delim)
+		out, err = RecvUntil(r, delim, drop...)
 		return err
 	})
 	return out, err
+}
+
+func shouldDropDelimiter(drop []bool) bool {
+	return len(drop) > 0 && drop[0]
 }
 
 func withReadDeadline(r io.Reader, timeout time.Duration, fn func() error) error {

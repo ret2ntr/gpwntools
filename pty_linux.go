@@ -19,6 +19,10 @@ type ptyMaster struct {
 }
 
 func openProcessPTY() (processOutput, *os.File, error) {
+	return openProcessPTYWithRaw(false)
+}
+
+func openProcessPTYWithRaw(raw bool) (processOutput, *os.File, error) {
 	masterFD, err := syscall.Open("/dev/ptmx", syscall.O_RDWR|syscall.O_NOCTTY|syscall.O_CLOEXEC, 0)
 	if err != nil {
 		return nil, nil, err
@@ -46,6 +50,14 @@ func openProcessPTY() (processOutput, *os.File, error) {
 		_ = master.Close()
 		_ = syscall.Close(slaveFD)
 		return nil, nil, err
+	}
+
+	if raw {
+		if err := makeRawPTY(slaveFD); err != nil {
+			_ = master.Close()
+			_ = syscall.Close(slaveFD)
+			return nil, nil, err
+		}
 	}
 
 	return &ptyMaster{file: master, fd: masterFD}, os.NewFile(uintptr(slaveFD), slaveName), nil
@@ -134,4 +146,20 @@ func fdSet(fd int, set *syscall.FdSet) bool {
 	}
 	set.Bits[fd/64] |= 1 << (uint(fd) % 64)
 	return true
+}
+
+func makeRawPTY(fd int) error {
+	termios, err := getTermios(fd)
+	if err != nil {
+		return err
+	}
+
+	termios.Iflag &^= syscall.BRKINT | syscall.ICRNL | syscall.INPCK | syscall.ISTRIP | syscall.IXON
+	termios.Oflag &^= syscall.OPOST
+	termios.Cflag |= syscall.CS8
+	termios.Lflag &^= syscall.ECHO | syscall.ECHONL | syscall.ICANON | syscall.IEXTEN | syscall.ISIG
+	termios.Cc[syscall.VMIN] = 1
+	termios.Cc[syscall.VTIME] = 0
+
+	return setTermios(fd, termios)
 }

@@ -17,6 +17,7 @@ Context defaults:
 gpwntools.Context.SetArch("amd64")
 gpwntools.Context.SetTerminal("tmux", "split-window", "-h")
 gpwntools.Context.Timeout = 2 * time.Second
+gpwntools.Context.KillOnTimeout = false
 gpwntools.Context.Endian = "little"
 gpwntools.Context.PTY = true // Linux default: local Process stdout/stderr use PTY
 ```
@@ -34,6 +35,24 @@ if err != nil {
 	panic(err)
 }
 _ = leak
+```
+
+ASCII hex helpers:
+
+```go
+value, err := gpwntools.ParseHexUint64([]byte("0x7fffdeadbeef"))
+if err != nil {
+	panic(err)
+}
+_ = value
+```
+
+```go
+addr, raw, err := gpwntools.RecvHexUint64(p, []byte("\n"))
+if err != nil {
+	panic(err)
+}
+_, _ = addr, raw
 ```
 
 Assembler helper:
@@ -68,8 +87,10 @@ putsGOT := e.GOT["puts"]
 putsPLT := e.PLT["puts"]
 text := e.Sections[".text"]
 binsh, err := e.Search([]byte("/bin/sh\x00"))
+ret, err := e.SearchExecutableOne(gpwntools.MustAsm("ret"))
+textRets, err := e.SearchSection(".text", gpwntools.MustAsm("ret"))
 
-_, _, _, _, _, _ = system, win, putsGOT, putsPLT, text, binsh
+_, _, _, _, _, _, _, _ = system, win, putsGOT, putsPLT, text, binsh, ret, textRets
 ```
 
 Checksec:
@@ -95,6 +116,9 @@ payload = gpwntools.MustFit(map[int]any{
 	0x00: []byte("AAAA"),
 	0x28: uint64(win),
 }, 'A')
+
+payload = gpwntools.Ljust(payload, 0x40, 'A')
+payload = append(payload, gpwntools.Gp64(win)...)
 
 pattern := gpwntools.Cyclic(200)
 offset := gpwntools.CyclicFind(pattern[40:44])
@@ -178,6 +202,16 @@ if err != nil {
 _ = p.Interactive()
 ```
 
+Pass `drop=true` to omit the matched delimiter from `RecvUntil` results:
+
+```go
+field, err := p.RecvUntil([]byte(":"), true)
+if err != nil {
+	panic(err)
+}
+_ = field
+```
+
 `Interactive()` keeps terminal input in line mode, so single keystrokes such as
 `c` or `ni` are not forwarded before Enter while debugging in a separate GDB
 terminal. Use raw mode when you want each keystroke forwarded immediately:
@@ -204,6 +238,14 @@ common C targets flush line-buffered prompts immediately. To force plain pipes:
 p, err := gpwntools.ProcessWithOptions([]string{"./chall"}, gpwntools.ProcessOptions{
 	DisablePTY: true,
 })
+```
+
+`Process` timeout is a per-call recv timeout. It does not kill the child by
+default. If you want timeout to terminate the process as well, enable:
+
+```go
+gpwntools.Context.Timeout = 2 * time.Second
+gpwntools.Context.KillOnTimeout = true
 ```
 
 GDB helpers:
@@ -239,6 +281,11 @@ defer p.Close()
 
 _ = p.Interactive()
 ```
+
+`GDBDebug` returns both the target tube and the GDB session. Target output stays
+in the tube; GDB status lines such as `Remote debugging from host ...` are
+filtered out. On Linux, the target PTY is kept in pwntools-style raw mode, so
+prompts stay as `\n` instead of `\r\n`.
 
 When the GDB session exits, `gpwntools` now closes the attached local process as
 well, so a blocked `Interactive()` call can unwind cleanly. Pressing `Ctrl+C`

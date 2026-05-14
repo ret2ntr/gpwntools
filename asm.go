@@ -38,6 +38,15 @@ func Asm(code string) ([]byte, error) {
 	return AsmWithOptions(code, AsmOptions{})
 }
 
+// MustAsm is Asm but panics on assembly errors.
+func MustAsm(code string) []byte {
+	out, err := Asm(code)
+	if err != nil {
+		panic(err)
+	}
+	return out
+}
+
 // AsmArch assembles code for a specific architecture.
 func AsmArch(code string, arch string) ([]byte, error) {
 	return AsmWithOptions(code, AsmOptions{Arch: arch})

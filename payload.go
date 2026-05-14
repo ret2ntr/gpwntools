@@ -65,6 +65,28 @@ func MustFit(fragments map[int]any, filler byte) []byte {
 	return out
 }
 
+// Ljust pads data on the right until it reaches size bytes.
+func Ljust(data []byte, size int, filler ...byte) []byte {
+	out := append([]byte(nil), data...)
+	if len(out) >= size {
+		return out
+	}
+
+	fill := justifyFiller(filler)
+	return append(out, bytes.Repeat([]byte{fill}, size-len(out))...)
+}
+
+// Rjust pads data on the left until it reaches size bytes.
+func Rjust(data []byte, size int, filler ...byte) []byte {
+	if len(data) >= size {
+		return append([]byte(nil), data...)
+	}
+
+	fill := justifyFiller(filler)
+	out := bytes.Repeat([]byte{fill}, size-len(data))
+	return append(out, data...)
+}
+
 // Cyclic generates a de Bruijn-like pattern for finding overflow offsets.
 func Cyclic(n int) []byte {
 	if n <= 0 {
@@ -143,6 +165,13 @@ func cyclicNeedle(needle any) ([]byte, error) {
 	default:
 		return nil, fmt.Errorf("unsupported cyclic needle %T", needle)
 	}
+}
+
+func justifyFiller(filler []byte) byte {
+	if len(filler) > 0 {
+		return filler[0]
+	}
+	return 0
 }
 
 func packContextWord(v uint64) ([]byte, error) {

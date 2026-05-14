@@ -109,17 +109,17 @@ func (r *RemoteTube) RecvLineTimeout(timeout time.Duration) ([]byte, error) {
 }
 
 // RecvUntil reads from the remote TCP connection until delim is seen.
-func (r *RemoteTube) RecvUntil(delim []byte) ([]byte, error) {
+func (r *RemoteTube) RecvUntil(delim []byte, drop ...bool) ([]byte, error) {
 	if r.timeout <= 0 {
-		return RecvUntil(r.bufferedReader(), delim)
+		return RecvUntil(r.bufferedReader(), delim, drop...)
 	}
-	return r.RecvUntilTimeout(delim, r.timeout)
+	return r.RecvUntilTimeout(delim, r.timeout, drop...)
 }
 
 // RecvUntilTimeout reads until delim is seen with a per-call timeout.
-func (r *RemoteTube) RecvUntilTimeout(delim []byte, timeout time.Duration) ([]byte, error) {
+func (r *RemoteTube) RecvUntilTimeout(delim []byte, timeout time.Duration, drop ...bool) ([]byte, error) {
 	return recvWithDeadline(r.conn, timeout, func() ([]byte, error) {
-		return RecvUntil(r.bufferedReader(), delim)
+		return RecvUntil(r.bufferedReader(), delim, drop...)
 	})
 }
 

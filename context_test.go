@@ -2,6 +2,8 @@ package gpwntools
 
 import (
 	"bytes"
+	"errors"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -60,6 +62,88 @@ func TestContextTimeoutAppliesToNewProcess(t *testing.T) {
 
 	if p.timeout != 150*time.Millisecond {
 		t.Fatalf("timeout = %s, want %s", p.timeout, 150*time.Millisecond)
+	}
+}
+
+func TestContextTimeoutAffectsProcessRecv(t *testing.T) {
+	saved := Context.Clone()
+	t.Cleanup(func() { Context.Apply(saved) })
+
+	Context.Timeout = 50 * time.Millisecond
+
+	p, err := ProcessWithOptions([]string{"sh", "-c", "sleep 1"}, ProcessOptions{
+		DisablePTY: true,
+	})
+	if err != nil {
+		t.Fatalf("ProcessWithOptions failed: %v", err)
+	}
+	t.Cleanup(func() { _ = p.Close() })
+
+	start := time.Now()
+	got, err := p.Recv(1)
+	elapsed := time.Since(start)
+	if err == nil {
+		t.Fatalf("Recv succeeded with %q, want timeout", got)
+	}
+	if elapsed > 500*time.Millisecond {
+		t.Fatalf("Recv returned after %s, want context timeout to apply", elapsed)
+	}
+}
+
+func TestContextTimeoutAffectsProcessSendLineAfter(t *testing.T) {
+	saved := Context.Clone()
+	t.Cleanup(func() { Context.Apply(saved) })
+
+	Context.Timeout = 50 * time.Millisecond
+
+	p, err := ProcessWithOptions([]string{"sh", "-c", "sleep 1"}, ProcessOptions{
+		DisablePTY: true,
+	})
+	if err != nil {
+		t.Fatalf("ProcessWithOptions failed: %v", err)
+	}
+	t.Cleanup(func() { _ = p.Close() })
+
+	start := time.Now()
+	got, err := p.SendLineAfter([]byte("never printed"), []byte("input"))
+	elapsed := time.Since(start)
+	if err == nil {
+		t.Fatalf("SendLineAfter succeeded after receiving %q, want timeout", got)
+	}
+	if elapsed > 500*time.Millisecond {
+		t.Fatalf("SendLineAfter returned after %s, want context timeout to apply", elapsed)
+	}
+}
+
+func TestContextKillOnTimeoutKillsProcess(t *testing.T) {
+	saved := Context.Clone()
+	t.Cleanup(func() { Context.Apply(saved) })
+
+	Context.Timeout = 50 * time.Millisecond
+	Context.KillOnTimeout = true
+
+	p, err := ProcessWithOptions([]string{"sh", "-c", "sleep 1"}, ProcessOptions{
+		DisablePTY: true,
+	})
+	if err != nil {
+		t.Fatalf("ProcessWithOptions failed: %v", err)
+	}
+
+	start := time.Now()
+	_, err = p.Recv(1)
+	elapsed := time.Since(start)
+	if err == nil {
+		t.Fatal("Recv succeeded, want timeout")
+	}
+	if !errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Fatalf("Recv error = %v, want deadline exceeded", err)
+	}
+	if elapsed > 500*time.Millisecond {
+		t.Fatalf("Recv returned after %s, want timeout", elapsed)
+	}
+
+	if waitErr := p.Wait(); waitErr == nil {
+		t.Fatal("Wait succeeded, want process termination after timeout")
 	}
 }
 
