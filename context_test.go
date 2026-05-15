@@ -165,6 +165,26 @@ func TestContextTerminalSelection(t *testing.T) {
 	}
 }
 
+func TestContextSetTerminalByName(t *testing.T) {
+	saved := Context.Clone()
+	t.Cleanup(func() { Context.Apply(saved) })
+
+	if err := Context.SetTerminalByName("wezterm"); err != nil {
+		t.Fatalf("SetTerminalByName failed: %v", err)
+	}
+
+	got := contextTerminal()
+	want := []string{"wezterm", "start", "--", "sh", "-lc"}
+	if len(got) != len(want) {
+		t.Fatalf("terminal len = %d, want %d", len(got), len(want))
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("terminal[%d] = %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
 func isMissingAsmToolError(err error) bool {
 	if err == nil {
 		return false

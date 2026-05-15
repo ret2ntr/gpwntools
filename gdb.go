@@ -557,15 +557,33 @@ func gdbDebugProcessBinary(argv0 string) string {
 func contextGDBTerminal() ([]string, error) {
 	terminal := contextTerminal()
 	if len(terminal) == 0 {
-		return nil, errors.New("no gdb terminal found; set gpwntools.Context.Terminal or install tmux/gnome-terminal/konsole/kitty/alacritty/xterm")
+		return nil, errors.New("no gdb terminal found; set gpwntools.Context.Terminal or install pwntools-terminal/tmux/zellij/screen/ptyxis/kgx/gnome-terminal/konsole/wezterm/kitty/terminator/alacritty/tilix/x-terminal-emulator/xterm")
 	}
 	return terminal, nil
 }
 
 // GDBTerminalDefault chooses a usable terminal launcher for GDB.
 func GDBTerminalDefault() []string {
+	if commandExists("pwntools-terminal") {
+		return GDBTerminalPwntools()
+	}
 	if os.Getenv("TMUX") != "" && commandExists("tmux") {
 		return GDBTerminalTmuxSplit()
+	}
+	if os.Getenv("ZELLIJ") != "" && commandExists("zellij") {
+		return GDBTerminalZellij()
+	}
+	if os.Getenv("STY") != "" && commandExists("screen") {
+		return GDBTerminalScreen()
+	}
+	if terminal := gdbTerminalFromTermProgram(); len(terminal) > 0 {
+		return terminal
+	}
+	if commandExists("ptyxis") {
+		return GDBTerminalPtyxis()
+	}
+	if commandExists("kgx") {
+		return GDBTerminalKGX()
 	}
 	if commandExists("gnome-terminal") {
 		return GDBTerminalGnome()
@@ -573,8 +591,17 @@ func GDBTerminalDefault() []string {
 	if commandExists("konsole") {
 		return GDBTerminalKonsole()
 	}
+	if commandExists("kconsole") {
+		return GDBTerminalKConsole()
+	}
+	if commandExists("wezterm") {
+		return GDBTerminalWezTerm()
+	}
 	if commandExists("kitty") {
 		return GDBTerminalKitty()
+	}
+	if commandExists("terminator") {
+		return GDBTerminalTerminator()
 	}
 	if commandExists("ghostty") {
 		return GDBTerminalGhostty()
@@ -582,15 +609,93 @@ func GDBTerminalDefault() []string {
 	if commandExists("alacritty") {
 		return GDBTerminalAlacritty()
 	}
+	if commandExists("tilix") {
+		return GDBTerminalTilix()
+	}
+	if os.Getenv("DISPLAY") != "" && commandExists("x-terminal-emulator") {
+		return GDBTerminalXTerminalEmulator()
+	}
 	if commandExists("xterm") {
 		return GDBTerminalXTerm()
 	}
 	return nil
 }
 
+// GDBTerminalByName returns a built-in terminal launcher by name.
+func GDBTerminalByName(name string) ([]string, error) {
+	switch normalizeTerminalName(name) {
+	case "pwntools", "pwntools-terminal":
+		return GDBTerminalPwntools(), nil
+	case "tmux", "tmux-split", "tmux-split-window":
+		return GDBTerminalTmuxSplit(), nil
+	case "zellij":
+		return GDBTerminalZellij(), nil
+	case "screen", "gnu-screen":
+		return GDBTerminalScreen(), nil
+	case "ptyxis":
+		return GDBTerminalPtyxis(), nil
+	case "kgx", "gnome-console", "console":
+		return GDBTerminalKGX(), nil
+	case "gnome", "gnome-terminal":
+		return GDBTerminalGnome(), nil
+	case "konsole":
+		return GDBTerminalKonsole(), nil
+	case "kconsole":
+		return GDBTerminalKConsole(), nil
+	case "wezterm":
+		return GDBTerminalWezTerm(), nil
+	case "kitty":
+		return GDBTerminalKitty(), nil
+	case "terminator":
+		return GDBTerminalTerminator(), nil
+	case "ghostty":
+		return GDBTerminalGhostty(), nil
+	case "alacritty":
+		return GDBTerminalAlacritty(), nil
+	case "tilix":
+		return GDBTerminalTilix(), nil
+	case "x-terminal-emulator", "xterminalemulator":
+		return GDBTerminalXTerminalEmulator(), nil
+	case "xterm":
+		return GDBTerminalXTerm(), nil
+	default:
+		return nil, unsupportedGDBTerminalError(name)
+	}
+}
+
+// GDBTerminalCustom returns a copy of a custom terminal command prefix.
+func GDBTerminalCustom(command ...string) []string {
+	return append([]string{}, command...)
+}
+
+// GDBTerminalPwntools returns a pwntools-terminal launcher for GDB.
+func GDBTerminalPwntools() []string {
+	return []string{"pwntools-terminal"}
+}
+
 // GDBTerminalTmuxSplit returns a tmux split-window launcher for GDB.
 func GDBTerminalTmuxSplit() []string {
 	return []string{"tmux", "split-window", "-h"}
+}
+
+// GDBTerminalZellij returns a zellij pane launcher for GDB.
+func GDBTerminalZellij() []string {
+	return []string{"zellij", "action", "new-pane", "--"}
+}
+
+// GDBTerminalScreen returns a GNU screen launcher for GDB.
+func GDBTerminalScreen() []string {
+	return []string{"screen", "-t", "gpwntools-gdb", "bash", "-c"}
+}
+
+// GDBTerminalPtyxis returns a Ptyxis launcher for GDB.
+func GDBTerminalPtyxis() []string {
+	return []string{"ptyxis", "--", "sh", "-lc"}
+}
+
+// GDBTerminalKGX returns a GNOME Console launcher for GDB.
+func GDBTerminalKGX() []string {
+	return []string{"kgx", "--", "sh", "-lc"}
 }
 
 // GDBTerminalGnome returns a GNOME Terminal launcher for GDB.
@@ -603,9 +708,24 @@ func GDBTerminalKonsole() []string {
 	return []string{"konsole", "-e", "sh", "-lc"}
 }
 
+// GDBTerminalKConsole returns a kconsole launcher for GDB.
+func GDBTerminalKConsole() []string {
+	return []string{"kconsole", "-e", "sh", "-lc"}
+}
+
+// GDBTerminalWezTerm returns a WezTerm launcher for GDB.
+func GDBTerminalWezTerm() []string {
+	return []string{"wezterm", "start", "--", "sh", "-lc"}
+}
+
 // GDBTerminalKitty returns a kitty launcher for GDB.
 func GDBTerminalKitty() []string {
 	return []string{"kitty", "sh", "-lc"}
+}
+
+// GDBTerminalTerminator returns a Terminator launcher for GDB.
+func GDBTerminalTerminator() []string {
+	return []string{"terminator", "-e"}
 }
 
 // GDBTerminalGhostty returns a Ghostty launcher for GDB.
@@ -618,9 +738,45 @@ func GDBTerminalAlacritty() []string {
 	return []string{"alacritty", "-e", "sh", "-lc"}
 }
 
+// GDBTerminalTilix returns a Tilix launcher for GDB.
+func GDBTerminalTilix() []string {
+	return []string{"tilix", "-a", "session-add-right", "-e"}
+}
+
+// GDBTerminalXTerminalEmulator returns a Debian x-terminal-emulator launcher for GDB.
+func GDBTerminalXTerminalEmulator() []string {
+	return []string{"x-terminal-emulator", "-e"}
+}
+
 // GDBTerminalXTerm returns an xterm launcher for GDB.
 func GDBTerminalXTerm() []string {
 	return []string{"xterm", "-e", "sh", "-lc"}
+}
+
+func gdbTerminalFromTermProgram() []string {
+	termProgram := strings.TrimSpace(os.Getenv("TERM_PROGRAM"))
+	if termProgram == "" || termProgram == "iTerm.app" {
+		return nil
+	}
+	if commandExists(termProgram) {
+		return []string{termProgram}
+	}
+	return nil
+}
+
+func normalizeTerminalName(name string) string {
+	name = strings.ToLower(strings.TrimSpace(name))
+	name = strings.ReplaceAll(name, "_", "-")
+	name = strings.ReplaceAll(name, " ", "-")
+	return name
+}
+
+func unsupportedGDBTerminalError(name string) error {
+	normalized := normalizeTerminalName(name)
+	if strings.HasPrefix(normalized, "tmux-") {
+		return fmt.Errorf("unsupported gdb terminal %q; SetTerminalByName only accepts built-in terminal names such as %q; for tmux arguments use gpwntools.Context.SetTerminal(%q, %q, %q)", name, "tmux", "tmux", "split-window", "-h")
+	}
+	return fmt.Errorf("unsupported gdb terminal %q; use gpwntools.Context.SetTerminal(...) for custom launchers, for example gpwntools.Context.SetTerminal(%q, %q, %q, %q, %q)", name, "wezterm", "start", "--", "sh", "-lc")
 }
 
 func gdbTargetPID(target any) (int, error) {
@@ -773,29 +929,43 @@ func (s *GDBSession) reapLauncher(launcherDone <-chan error) {
 }
 
 func (s *GDBSession) waitForTerminalStartup(launcherDone chan error, timeout time.Duration) error {
+	return waitForTerminalStartup(s.Cmd.Path, s.WatchPath, s.PidPath, s.ReadyPath, launcherDone, timeout)
+}
+
+func waitForTerminalStartup(cmdPath string, watchPath string, pidPath string, readyPath string, launcherDone chan error, timeout time.Duration) error {
 	deadline := time.NewTimer(timeout)
 	defer deadline.Stop()
 
 	ticker := time.NewTicker(20 * time.Millisecond)
 	defer ticker.Stop()
 
+	launcherExited := false
 	for {
-		if terminalGDBStarted(s.WatchPath, s.PidPath, s.ReadyPath) {
+		if terminalGDBStarted(watchPath, pidPath, readyPath) {
 			return nil
 		}
 
 		select {
 		case err := <-launcherDone:
-			if terminalGDBStarted(s.WatchPath, s.PidPath, s.ReadyPath) {
+			launcherExited = true
+			if terminalGDBStarted(watchPath, pidPath, readyPath) {
 				launcherDone <- err
 				return nil
 			}
 			if err == nil {
-				return fmt.Errorf("gdb terminal %s exited before gdb started", s.Cmd.Path)
+				// tmux split-window and similar launchers exit successfully after
+				// handing the command to the new pane/window. Keep waiting for
+				// the wrapper to write its pid/ready marker.
+				launcherDone <- nil
+				launcherDone = nil
+				continue
 			}
-			return fmt.Errorf("gdb terminal %s exited before gdb started: %w", s.Cmd.Path, err)
+			return fmt.Errorf("gdb terminal %s exited before gdb started: %w", cmdPath, err)
 		case <-ticker.C:
 		case <-deadline.C:
+			if launcherExited && !terminalGDBStarted(watchPath, pidPath, readyPath) {
+				return fmt.Errorf("gdb terminal %s exited before gdb started", cmdPath)
+			}
 			return nil
 		}
 	}

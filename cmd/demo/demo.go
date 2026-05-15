@@ -8,6 +8,8 @@ import (
 )
 
 func main() {
+//	gpwntools.Context.SetTerminal("tmux", "split-window", "-h")
+//	gpwntools.Context.SetTerminalByName("tmux")
 	file_name := "./target/test"
 	elf ,err := gpwntools.ELF(file_name)
 	if err != nil {
@@ -17,8 +19,9 @@ func main() {
 		panic(err)
 	}
 	defer elf.Close()
-	//p, _, err := gpwntools.GDBDebug([]string{file_name}, "b vuln\n continue")
-	p,err :=gpwntools.Process("./target/test")
+	//p, _, err := gpwntools.GDBDebug([]string{file_name}, "b vuln\ncontinue")
+	p,err :=gpwntools.Process(file_name)
+
 	if err != nil {
 		panic(err)
 	}

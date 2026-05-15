@@ -10,3 +10,7 @@ import (
 func openProcessPTY() (processOutput, *os.File, error) {
 	return nil, nil, errors.New("process PTY is only implemented on linux")
 }
+
+func openProcessPTYWithRaw(raw bool) (processOutput, *os.File, error) {
+	return nil, nil, errors.New("process PTY is only implemented on linux")
+}

@@ -84,6 +84,10 @@ func (p *ptyMaster) Close() error {
 	return p.file.Close()
 }
 
+func (p *ptyMaster) Write(buf []byte) (int, error) {
+	return p.file.Write(buf)
+}
+
 func (p *ptyMaster) SetReadDeadline(deadline time.Time) error {
 	p.readDeadline = deadline
 	return nil

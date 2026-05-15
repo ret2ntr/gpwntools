@@ -154,8 +154,7 @@ func TestProcessPTYStillBuffersTerminalInputUntilEnter(t *testing.T) {
 		}
 	}()
 
-	master := inputMaster.(*ptyMaster)
-	if _, err := master.file.Write([]byte("n")); err != nil {
+	if _, err := inputMaster.(io.Writer).Write([]byte("n")); err != nil {
 		t.Fatalf("write terminal input: %v", err)
 	}
 
@@ -165,7 +164,7 @@ func TestProcessPTYStillBuffersTerminalInputUntilEnter(t *testing.T) {
 	case <-time.After(100 * time.Millisecond):
 	}
 
-	if _, err := master.file.Write([]byte("\n")); err != nil {
+	if _, err := inputMaster.(io.Writer).Write([]byte("\n")); err != nil {
 		t.Fatalf("write terminal newline: %v", err)
 	}
 

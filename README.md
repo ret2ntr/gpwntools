@@ -16,6 +16,8 @@ Context defaults:
 ```go
 gpwntools.Context.SetArch("amd64")
 gpwntools.Context.SetTerminal("tmux", "split-window", "-h")
+// or use a built-in profile:
+_ = gpwntools.Context.SetTerminalByName("wezterm")
 gpwntools.Context.Timeout = 2 * time.Second
 gpwntools.Context.KillOnTimeout = false
 gpwntools.Context.Endian = "little"
@@ -266,6 +268,35 @@ if err != nil {
 defer g.Close()
 
 _ = p.Interactive()
+```
+
+Terminal selection:
+
+If `Context.Terminal` is empty, GDB helpers auto-detect a terminal. To switch
+to a built-in terminal profile:
+
+```go
+if err := gpwntools.Context.SetTerminalByName("wezterm"); err != nil {
+	panic(err)
+}
+
+if err := gpwntools.Context.SetTerminalByName("ptyxis"); err != nil {
+	panic(err)
+}
+```
+
+Built-in terminal names include `pwntools-terminal`, `tmux`, `zellij`,
+`screen`, `ptyxis`, `kgx`, `gnome-terminal`, `konsole`, `kconsole`, `wezterm`,
+`kitty`, `terminator`, `ghostty`, `alacritty`, `tilix`,
+`x-terminal-emulator`, and `xterm`.
+
+For custom launchers, use `SetTerminal`. Like pwntools, this is a command
+prefix; gpwntools appends the shell-escaped GDB command as the final argument:
+
+```go
+gpwntools.Context.SetTerminal("tmux", "split-window", "-h")
+gpwntools.Context.SetTerminal("wezterm", "start", "--", "sh", "-lc")
+gpwntools.Context.SetTerminal("my-terminal", "--exec", "sh", "-lc")
 ```
 
 To start a new process under gdbserver while keeping target IO as a tube,

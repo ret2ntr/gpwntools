@@ -18,7 +18,9 @@ type ContextConfig struct {
 	OS string
 	// Syntax is the default assembly syntax. x86 accepts "intel" or "att".
 	Syntax string
-	// Terminal is the terminal command used by GDB helpers. If empty, gpwntools auto-detects one.
+	// Terminal is the terminal command prefix used by GDB helpers. The complete
+	// shell-escaped GDB command is appended as the final argument. If empty,
+	// gpwntools auto-detects one.
 	Terminal []string
 	// Timeout is copied into newly-created tubes as their default recv timeout.
 	Timeout time.Duration
@@ -73,6 +75,16 @@ func (c *ContextConfig) SetArch(arch string) {
 // SetTerminal changes the terminal command used by GDB helpers.
 func (c *ContextConfig) SetTerminal(command ...string) {
 	c.Terminal = append([]string{}, command...)
+}
+
+// SetTerminalByName selects a built-in terminal launcher by name.
+func (c *ContextConfig) SetTerminalByName(name string) error {
+	terminal, err := GDBTerminalByName(name)
+	if err != nil {
+		return err
+	}
+	c.Terminal = terminal
+	return nil
 }
 
 func contextArch() string {

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -110,6 +111,43 @@ func TestGDBTerminalWaitsForScriptReady(t *testing.T) {
 
 	if err := session.Wait(); err != nil {
 		t.Fatalf("Wait failed: %v", err)
+	}
+}
+
+func TestGDBTerminalAllowsSuccessfulDetachedLauncher(t *testing.T) {
+	watchPath, err := tempMarker("gpwntools-test-watch-*")
+	if err != nil {
+		t.Fatalf("tempMarker failed: %v", err)
+	}
+	t.Cleanup(func() { _ = removeIfExists(watchPath) })
+
+	start := time.Now()
+	launcherDone := make(chan error, 1)
+	launcherDone <- nil
+	err = waitForTerminalStartup("tmux", watchPath, "", "", launcherDone, 100*time.Millisecond)
+	if err == nil {
+		t.Fatal("waitForTerminalStartup succeeded without marker after detached launcher exit")
+	}
+	if elapsed := time.Since(start); elapsed < 80*time.Millisecond {
+		t.Fatalf("waitForTerminalStartup returned before timeout: %s", elapsed)
+	}
+	if !strings.Contains(err.Error(), "exited before gdb started") {
+		t.Fatalf("waitForTerminalStartup error = %q, want detached launcher startup error", err.Error())
+	}
+
+	watchPath2, err := tempMarker("gpwntools-test-watch-*")
+	if err != nil {
+		t.Fatalf("tempMarker failed: %v", err)
+	}
+	pidPath := t.TempDir() + "/pid"
+	launcherDone = make(chan error, 1)
+	launcherDone <- nil
+	go func() {
+		time.Sleep(30 * time.Millisecond)
+		_ = os.WriteFile(pidPath, []byte("1234\n"), 0600)
+	}()
+	if err := waitForTerminalStartup("tmux", watchPath2, pidPath, "", launcherDone, time.Second); err != nil {
+		t.Fatalf("waitForTerminalStartup failed after detached launcher marker: %v", err)
 	}
 }
 
@@ -266,6 +304,46 @@ func TestGDBTerminalStartFailureReturned(t *testing.T) {
 	case <-called:
 		t.Fatal("onExit callback should not be called when terminal never starts gdb")
 	default:
+	}
+}
+
+func TestGDBTerminalByName(t *testing.T) {
+	cases := map[string][]string{
+		"pwntools-terminal":   {"pwntools-terminal"},
+		"tmux_split":          {"tmux", "split-window", "-h"},
+		"zellij":              {"zellij", "action", "new-pane", "--"},
+		"screen":              {"screen", "-t", "gpwntools-gdb", "bash", "-c"},
+		"ptyxis":              {"ptyxis", "--", "sh", "-lc"},
+		"kgx":                 {"kgx", "--", "sh", "-lc"},
+		"gnome-console":       {"kgx", "--", "sh", "-lc"},
+		"wezterm":             {"wezterm", "start", "--", "sh", "-lc"},
+		"terminator":          {"terminator", "-e"},
+		"konsole":             {"konsole", "-e", "sh", "-lc"},
+		"kconsole":            {"kconsole", "-e", "sh", "-lc"},
+		"tilix":               {"tilix", "-a", "session-add-right", "-e"},
+		"x-terminal-emulator": {"x-terminal-emulator", "-e"},
+	}
+
+	for name, want := range cases {
+		got, err := GDBTerminalByName(name)
+		if err != nil {
+			t.Fatalf("GDBTerminalByName(%q) failed: %v", name, err)
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("GDBTerminalByName(%q) = %#v, want %#v", name, got, want)
+		}
+	}
+
+	if _, err := GDBTerminalByName("missing-terminal"); err == nil {
+		t.Fatal("GDBTerminalByName accepted unsupported terminal")
+	} else if !strings.Contains(err.Error(), "Context.SetTerminal") {
+		t.Fatalf("unsupported terminal error = %q, want custom terminal hint", err.Error())
+	}
+
+	if _, err := GDBTerminalByName("tmux split-window -h"); err == nil {
+		t.Fatal("GDBTerminalByName accepted tmux command string")
+	} else if !strings.Contains(err.Error(), `Context.SetTerminal("tmux", "split-window", "-h")`) {
+		t.Fatalf("tmux terminal error = %q, want tmux SetTerminal hint", err.Error())
 	}
 }
 
