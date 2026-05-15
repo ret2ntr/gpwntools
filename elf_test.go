@@ -63,3 +63,21 @@ func TestSetBaseRebasesAddressMaps(t *testing.T) {
 		t.Fatalf("rebased symbol = %#x, want %#x", e.Symbols["backdoor"], uint64(0x66667234))
 	}
 }
+
+func TestELFContextDefaults(t *testing.T) {
+	f := &elf.File{
+		FileHeader: elf.FileHeader{
+			Class:     elf.ELFCLASS64,
+			Machine:   elf.EM_X86_64,
+			OSABI:     elf.ELFOSABI_LINUX,
+			ByteOrder: nil,
+		},
+	}
+
+	if got := contextArchForELF(f); got != "amd64" {
+		t.Fatalf("contextArchForELF = %q, want %q", got, "amd64")
+	}
+	if got := contextOSForELF(f); got != "linux" {
+		t.Fatalf("contextOSForELF = %q, want %q", got, "linux")
+	}
+}

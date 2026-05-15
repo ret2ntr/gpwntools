@@ -128,7 +128,7 @@ func (r *RemoteTube) SetTimeout(timeout time.Duration) {
 	r.timeout = timeout
 }
 
-// Interactive connects stdin/stdout to the remote TCP connection without cbreak mode.
+// Interactive connects stdin/stdout to the remote TCP connection in line mode.
 func (r *RemoteTube) Interactive() error {
 	return r.interactiveWithIO(os.Stdin, os.Stdout)
 }

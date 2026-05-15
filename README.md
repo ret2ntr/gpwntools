@@ -15,6 +15,7 @@ Context defaults:
 
 ```go
 gpwntools.Context.SetArch("amd64")
+gpwntools.Context.SetOS("linux")
 gpwntools.Context.SetTerminal("tmux", "split-window", "-h")
 // or use a built-in profile:
 _ = gpwntools.Context.SetTerminalByName("wezterm")
@@ -22,6 +23,8 @@ gpwntools.Context.Timeout = 2 * time.Second
 gpwntools.Context.KillOnTimeout = false
 gpwntools.Context.Endian = "little"
 gpwntools.Context.PTY = true // Linux default: local Process stdout/stderr use PTY
+gpwntools.Context.InteractiveSystemEcho = true
+gpwntools.Context.InteractiveLineEcho = false
 ```
 
 Packing helpers:
@@ -67,8 +70,34 @@ if err != nil {
 fmt.Printf("% x\n", code) // 48 31 c0 c3
 ```
 
+`Asm` defaults to `gpwntools.Context.Arch`, `Context.OS`, and `Context.Syntax`.
+`ELF(path)` updates `Context.Arch` and `Context.OS` from the target ELF, so
+assembling small gadgets after loading the binary uses the target defaults:
+
 ```go
-code, err := gpwntools.AsmArch("xor eax, eax\nret", "i386")
+e, err := gpwntools.ELF("./chall")
+if err != nil {
+	panic(err)
+}
+defer e.Close()
+
+ret := gpwntools.MustAsm("ret")
+_ = ret
+```
+
+Simple x86 snippets such as `ret`, `pop rdi; ret`, `syscall`, and
+`mov eax, SYS_select` are encoded by gpwntools directly, so they also work
+when a Windows build is running under Wine without Linux `as`/`clang` in that
+runtime. Longer or unsupported assembly still needs an assembler available to
+the process.
+
+Override only the fields you need:
+
+```go
+code, err := gpwntools.AsmWithOptions("mov eax, SYS_select\nret", gpwntools.AsmOptions{
+	Arch: "i386",
+	OS:   "freebsd",
+})
 ```
 
 ELF helpers:
@@ -216,7 +245,18 @@ _ = field
 
 `Interactive()` keeps terminal input in line mode, so single keystrokes such as
 `c` or `ni` are not forwarded before Enter while debugging in a separate GDB
-terminal. Use raw mode when you want each keystroke forwarded immediately:
+terminal. It also normalizes Windows/Wine `\r\n` input to `\n`, which keeps
+Unix shells from receiving commands such as `ls\r`.
+
+By default `Interactive()` uses the terminal driver's system echo. To let
+gpwntools draw typed line input instead:
+
+```go
+gpwntools.Context.InteractiveSystemEcho = false
+gpwntools.Context.InteractiveLineEcho = true
+```
+
+Use raw mode when you want each keystroke forwarded immediately:
 
 ```go
 _ = p.InteractiveRaw()

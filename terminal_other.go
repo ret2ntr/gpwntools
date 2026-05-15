@@ -1,10 +1,10 @@
-//go:build !linux
+//go:build !linux && !windows
 
 package gpwntools
 
 import "io"
 
-func makeRawIfTerminal(input io.Reader) (func() error, error) {
+func makeRawIfTerminal(input io.Reader, echo bool) (func() error, error) {
 	return noopTerminalRestore, nil
 }
 

@@ -231,7 +231,7 @@ func (p *ProcessTube) Wait() error {
 	return p.waitErr
 }
 
-// Interactive connects stdin/stdout to the local process without cbreak mode.
+// Interactive connects stdin/stdout to the local process in line mode.
 func (p *ProcessTube) Interactive() error {
 	return p.interactiveWithIO(os.Stdin, os.Stdout)
 }

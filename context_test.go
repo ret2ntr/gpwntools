@@ -48,6 +48,103 @@ func TestContextAsmDefaultArch(t *testing.T) {
 	}
 }
 
+func TestAsmBuiltinRetDoesNotRequireExternalAssembler(t *testing.T) {
+	got, err := AsmWithOptions("ret", AsmOptions{
+		Arch: "amd64",
+		OS:   "linux",
+		As:   "/definitely/missing/as",
+	})
+	if err != nil {
+		t.Fatalf("AsmWithOptions(ret) failed: %v", err)
+	}
+	if !bytes.Equal(got, []byte{0xc3}) {
+		t.Fatalf("AsmWithOptions(ret) = %#v, want %#v", got, []byte{0xc3})
+	}
+}
+
+func TestAsmBuiltinSyscallConstant(t *testing.T) {
+	got, err := AsmWithOptions("mov eax, SYS_select\nret", AsmOptions{
+		Arch: "i386",
+		OS:   "linux",
+		As:   "/definitely/missing/as",
+	})
+	if err != nil {
+		t.Fatalf("AsmWithOptions(SYS_select) failed: %v", err)
+	}
+	want := []byte{0xb8, 0x52, 0x00, 0x00, 0x00, 0xc3}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("AsmWithOptions(SYS_select) = %#v, want %#v", got, want)
+	}
+}
+
+func TestAsmBuiltinFreeBSDSyscallConstant(t *testing.T) {
+	got, err := AsmWithOptions("mov eax, SYS_select", AsmOptions{
+		Arch: "i386",
+		OS:   "freebsd",
+		As:   "/definitely/missing/as",
+	})
+	if err != nil {
+		t.Fatalf("AsmWithOptions(freebsd SYS_select) failed: %v", err)
+	}
+	want := []byte{0xb8, 0x5d, 0x00, 0x00, 0x00}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("AsmWithOptions(freebsd SYS_select) = %#v, want %#v", got, want)
+	}
+}
+
+func TestAsmBuiltinRespectsI386Registers(t *testing.T) {
+	got, err := AsmWithOptions("pop edi", AsmOptions{
+		Arch: "i386",
+		OS:   "linux",
+		As:   "/definitely/missing/as",
+	})
+	if err != nil {
+		t.Fatalf("AsmWithOptions(pop edi) failed: %v", err)
+	}
+	if !bytes.Equal(got, []byte{0x5f}) {
+		t.Fatalf("AsmWithOptions(pop edi) = %#v, want %#v", got, []byte{0x5f})
+	}
+
+	if got, err := AsmWithOptions("pop rdi", AsmOptions{
+		Arch: "i386",
+		OS:   "linux",
+		As:   "/definitely/missing/as",
+	}); err == nil {
+		t.Fatalf("AsmWithOptions(pop rdi) = %#v, want error", got)
+	}
+}
+
+func TestAsmOptionsUseContextOS(t *testing.T) {
+	saved := Context.Clone()
+	t.Cleanup(func() { Context.Apply(saved) })
+
+	Context.SetArch("i386")
+	Context.SetOS("freebsd")
+
+	if got := asmOS(AsmOptions{}); got != "freebsd" {
+		t.Fatalf("asmOS = %q, want %q", got, "freebsd")
+	}
+	if got := asmClangTarget("i386", asmOS(AsmOptions{})); got != "i386-unknown-freebsd" {
+		t.Fatalf("asm clang target = %q, want %q", got, "i386-unknown-freebsd")
+	}
+	if got := asmClangTarget("x86_64", asmOS(AsmOptions{OS: "linux"})); got != "x86_64-linux-gnu" {
+		t.Fatalf("asm override target = %q, want %q", got, "x86_64-linux-gnu")
+	}
+}
+
+func TestWindowsAsmTargetDoesNotUseHostAssembler(t *testing.T) {
+	cfg, err := asmToolchainConfigForArch("amd64", "windows")
+	if err != nil {
+		t.Fatalf("asmToolchainConfigForArch failed: %v", err)
+	}
+	if cfg.allowHostTools {
+		t.Fatal("windows asm target allowed host GNU as")
+	}
+	if cfg.clangTarget != "x86_64-w64-windows-gnu" {
+		t.Fatalf("clang target = %q, want %q", cfg.clangTarget, "x86_64-w64-windows-gnu")
+	}
+}
+
 func TestContextTimeoutAppliesToNewProcess(t *testing.T) {
 	saved := Context.Clone()
 	t.Cleanup(func() { Context.Apply(saved) })
@@ -182,6 +279,16 @@ func TestContextSetTerminalByName(t *testing.T) {
 		if got[i] != want[i] {
 			t.Fatalf("terminal[%d] = %q, want %q", i, got[i], want[i])
 		}
+	}
+}
+
+func TestDefaultContextInteractiveEcho(t *testing.T) {
+	defaults := DefaultContext()
+	if !defaults.InteractiveSystemEcho {
+		t.Fatal("InteractiveSystemEcho default is false, want true")
+	}
+	if defaults.InteractiveLineEcho {
+		t.Fatal("InteractiveLineEcho default is true, want false")
 	}
 }
 

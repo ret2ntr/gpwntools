@@ -10,7 +10,7 @@ import (
 	"unsafe"
 )
 
-func makeRawIfTerminal(input io.Reader) (func() error, error) {
+func makeRawIfTerminal(input io.Reader, echo bool) (func() error, error) {
 	file, ok := input.(*os.File)
 	if !ok {
 		return noopTerminalRestore, nil
@@ -27,6 +27,11 @@ func makeRawIfTerminal(input io.Reader) (func() error, error) {
 
 	cbreakState := *oldState
 	cbreakState.Lflag &^= syscall.ICANON | syscall.ECHOCTL
+	if echo {
+		cbreakState.Lflag |= syscall.ECHO
+	} else {
+		cbreakState.Lflag &^= syscall.ECHO
+	}
 	cbreakState.Cc[syscall.VMIN] = 1
 	cbreakState.Cc[syscall.VTIME] = 0
 

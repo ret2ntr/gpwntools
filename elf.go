@@ -3,6 +3,7 @@ package gpwntools
 import (
 	"bytes"
 	"debug/elf"
+	"encoding/binary"
 	"errors"
 	"fmt"
 )
@@ -58,6 +59,7 @@ func ELF(path string) (*ELFFile, error) {
 	if err := out.loadRelocations(f); err != nil {
 		return nil, err
 	}
+	out.applyContextDefaults(f)
 	return out, nil
 }
 
@@ -290,6 +292,56 @@ func (e *ELFFile) loadSymbols(f *elf.File) {
 	}
 	if symbols, err := f.Symbols(); err == nil {
 		load(symbols)
+	}
+}
+
+func (e *ELFFile) applyContextDefaults(f *elf.File) {
+	if arch := contextArchForELF(f); arch != "" {
+		Context.SetArch(arch)
+	}
+	if osName := contextOSForELF(f); osName != "" {
+		Context.SetOS(osName)
+	}
+}
+
+func contextArchForELF(f *elf.File) string {
+	switch f.Machine {
+	case elf.EM_X86_64:
+		return "amd64"
+	case elf.EM_386:
+		return "i386"
+	case elf.EM_ARM:
+		return "arm"
+	case elf.EM_AARCH64:
+		return "aarch64"
+	case elf.EM_MIPS, elf.EM_MIPS_RS3_LE:
+		if f.Class == elf.ELFCLASS64 {
+			if f.ByteOrder == binary.LittleEndian {
+				return "mips64el"
+			}
+			return "mips64"
+		}
+		if f.ByteOrder == binary.LittleEndian {
+			return "mipsel"
+		}
+		return "mips"
+	default:
+		return ""
+	}
+}
+
+func contextOSForELF(f *elf.File) string {
+	switch f.OSABI {
+	case elf.ELFOSABI_LINUX, elf.ELFOSABI_NONE:
+		return "linux"
+	case elf.ELFOSABI_FREEBSD:
+		return "freebsd"
+	case elf.ELFOSABI_OPENBSD:
+		return "openbsd"
+	case elf.ELFOSABI_NETBSD:
+		return "netbsd"
+	default:
+		return ""
 	}
 }
 

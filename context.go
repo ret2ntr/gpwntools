@@ -28,23 +28,30 @@ type ContextConfig struct {
 	KillOnTimeout bool
 	// PTY makes local Process stdout/stderr use a pseudo-terminal by default.
 	PTY bool
+	// InteractiveSystemEcho keeps the terminal driver's local echo enabled
+	// during Interactive and InteractiveRaw.
+	InteractiveSystemEcho bool
+	// InteractiveLineEcho makes Interactive display typed line input itself.
+	InteractiveLineEcho bool
 }
 
 // Context stores package-wide defaults, similar to pwntools' context object.
 var Context = ContextConfig{
-	Arch:   defaultContextArch(),
-	OS:     runtime.GOOS,
-	Syntax: "intel",
-	PTY:    defaultContextPTY(),
+	Arch:                  defaultContextArch(),
+	OS:                    runtime.GOOS,
+	Syntax:                "intel",
+	PTY:                   defaultContextPTY(),
+	InteractiveSystemEcho: true,
 }
 
 // DefaultContext returns a fresh copy of the built-in defaults.
 func DefaultContext() ContextConfig {
 	return ContextConfig{
-		Arch:   defaultContextArch(),
-		OS:     runtime.GOOS,
-		Syntax: "intel",
-		PTY:    defaultContextPTY(),
+		Arch:                  defaultContextArch(),
+		OS:                    runtime.GOOS,
+		Syntax:                "intel",
+		PTY:                   defaultContextPTY(),
+		InteractiveSystemEcho: true,
 	}
 }
 
@@ -70,6 +77,11 @@ func (c *ContextConfig) SetArch(arch string) {
 	c.Arch = strings.ToLower(strings.TrimSpace(arch))
 	c.Bits = 0
 	c.Endian = ""
+}
+
+// SetOS changes the default target operating system used by helpers such as Asm.
+func (c *ContextConfig) SetOS(osName string) {
+	c.OS = normalizeContextOS(osName)
 }
 
 // SetTerminal changes the terminal command used by GDB helpers.
@@ -126,6 +138,14 @@ func contextEndian() string {
 	}
 }
 
+func contextOS() string {
+	osName := normalizeContextOS(Context.OS)
+	if osName == "" {
+		return runtime.GOOS
+	}
+	return osName
+}
+
 func contextTimeout() time.Duration {
 	return Context.Timeout
 }
@@ -156,6 +176,25 @@ func normalizeEndian(endian string) string {
 		return "big"
 	default:
 		return ""
+	}
+}
+
+func normalizeContextOS(osName string) string {
+	switch strings.ToLower(strings.TrimSpace(osName)) {
+	case "linux", "gnu/linux":
+		return "linux"
+	case "freebsd", "free-bsd":
+		return "freebsd"
+	case "openbsd", "open-bsd":
+		return "openbsd"
+	case "netbsd", "net-bsd":
+		return "netbsd"
+	case "darwin", "macos", "mac", "osx":
+		return "darwin"
+	case "windows", "win", "win32":
+		return "windows"
+	default:
+		return strings.ToLower(strings.TrimSpace(osName))
 	}
 }
 
