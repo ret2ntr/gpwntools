@@ -52,14 +52,6 @@ func MustAsm(code string) []byte {
 	return out
 }
 
-// AsmArch assembles code for a specific architecture.
-//
-// Deprecated: use AsmWithOptions with AsmOptions{Arch: "..."} when overriding
-// context defaults.
-func AsmArch(code string, arch string) ([]byte, error) {
-	return AsmWithOptions(code, AsmOptions{Arch: arch})
-}
-
 // AsmWithOptions assembles code to raw machine bytes.
 func AsmWithOptions(code string, opts AsmOptions) ([]byte, error) {
 	if strings.TrimSpace(code) == "" {
