@@ -205,7 +205,7 @@ if !gpwntools.IsAlphanumeric(encoded) {
 	panic("encoder returned non-alphanumeric bytes")
 }
 
-// Equivalent to ae64's encode(shellcode, "r13", 0x30, "fast").
+// Use a different decoder base register and offset.
 encoded, err = gpwntools.Alphanumeric.Encode(
 	sc,
 	gpwntools.WithAlphanumericRegister("r13"),
@@ -214,7 +214,7 @@ encoded, err = gpwntools.Alphanumeric.Encode(
 _, _ = encoded, err
 ```
 
-The alphanumeric encoder currently targets amd64 and implements ae64's `fast`
+The alphanumeric encoder currently targets amd64 and uses a fast encoding
 strategy without requiring keystone or z3. The decoded shellcode is written back
 in place, so the target page must be writable.
 

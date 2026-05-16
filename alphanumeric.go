@@ -31,7 +31,7 @@ var (
 // AlphanumericOptions configures amd64 alphanumeric shellcode encoding.
 type AlphanumericOptions struct {
 	// Register is the register that points at the encoded shellcode. It
-	// defaults to rax, matching ae64.
+	// defaults to rax.
 	Register string
 	// Offset is added to the shellcode pointer while building decoder offsets.
 	Offset int
@@ -113,7 +113,7 @@ func (e AlphanumericEncoder) MustEncode(shellcode []byte, options ...Alphanumeri
 	return out
 }
 
-// EncodeFast is the ae64-style fast amd64 alphanumeric encoder.
+// EncodeFast is the fast amd64 alphanumeric encoder.
 func (e AlphanumericEncoder) EncodeFast(shellcode []byte, register string, offset int) ([]byte, error) {
 	return alphaEncodeFast(shellcode, register, offset)
 }
