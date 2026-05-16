@@ -92,6 +92,83 @@ func TestAsmBuiltinFreeBSDSyscallConstant(t *testing.T) {
 	}
 }
 
+func TestAsmFallbackExpandsSyscallConstants(t *testing.T) {
+	got, err := AsmWithOptions("lea rdi, [rsp]\nmov eax, SYS_open\nsyscall", AsmOptions{
+		Arch: "amd64",
+		OS:   "linux",
+	})
+	if err != nil {
+		if isMissingAsmToolError(err) {
+			t.Skip(err)
+		}
+		t.Fatalf("AsmWithOptions fallback failed: %v", err)
+	}
+	want := []byte{0xb8, 0x02, 0x00, 0x00, 0x00}
+	if !bytes.Contains(got, want) {
+		t.Fatalf("fallback asm did not expand SYS_open: got %#v, want bytes %#v", got, want)
+	}
+}
+
+func TestAsmExpandSyscallConstantsSkipsCommentsAndStrings(t *testing.T) {
+	got, err := asmExpandSyscallConstants("mov eax, SYS_open # SYS_missing\n.ascii \"SYS_write\"\n", "amd64", "linux")
+	if err != nil {
+		t.Fatalf("asmExpandSyscallConstants failed: %v", err)
+	}
+	want := "mov eax, 2 # SYS_missing\n.ascii \"SYS_write\"\n"
+	if got != want {
+		t.Fatalf("expanded asm = %q, want %q", got, want)
+	}
+}
+
+func TestAsmExpandSyscallConstantsKeepsAArch64ImmediatePrefix(t *testing.T) {
+	got, err := asmExpandSyscallConstants("mov x8, #SYS_mmap\nsvc #0\n", "aarch64", "linux")
+	if err != nil {
+		t.Fatalf("asmExpandSyscallConstants failed: %v", err)
+	}
+	want := "mov x8, #222\nsvc #0\n"
+	if got != want {
+		t.Fatalf("expanded aarch64 asm = %q, want %q", got, want)
+	}
+}
+
+func TestAsmSyscallNumbersAdditionalLinuxArchitectures(t *testing.T) {
+	cases := []struct {
+		arch string
+		name string
+		want uint64
+	}{
+		{"arm", "SYS_open", 5},
+		{"aarch64", "SYS_openat", 56},
+		{"mips", "SYS_open", 4005},
+		{"mipsel", "SYS_open", 4005},
+		{"mips64", "SYS_execve", 5057},
+		{"mips64el", "SYS_execve", 5057},
+		{"amd64", "SYS_bpf", 321},
+		{"i386", "SYS_mmap2", 192},
+		{"arm", "SYS_execveat", 387},
+		{"aarch64", "SYS_mmap", 222},
+		{"mips", "SYS_mmap2", 4210},
+		{"mips64", "SYS_mmap", 5009},
+		{"amd64", "SYS_sendfile", 40},
+		{"arm", "SYS_sendfile", 187},
+		{"aarch64", "SYS_sendfile", 71},
+		{"mips", "SYS_sendfile", 4207},
+		{"mips64", "SYS_sendfile", 5039},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.arch+"/"+tc.name, func(t *testing.T) {
+			got, err := asmSyscallNumber(tc.name, tc.arch, "linux")
+			if err != nil {
+				t.Fatalf("asmSyscallNumber failed: %v", err)
+			}
+			if got != tc.want {
+				t.Fatalf("asmSyscallNumber(%q, %q) = %d, want %d", tc.name, tc.arch, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestAsmBuiltinRespectsI386Registers(t *testing.T) {
 	got, err := AsmWithOptions("pop edi", AsmOptions{
 		Arch: "i386",

@@ -125,6 +125,32 @@ func flatPart(part any) ([]byte, error) {
 		return append([]byte(nil), v...), nil
 	case string:
 		return []byte(v), nil
+	case *SROPFrame:
+		if v == nil {
+			return []byte{}, nil
+		}
+		return v.Bytes(), nil
+	case IoUringSQE:
+		return v.Bytes(), nil
+	case *IoUringSQE:
+		if v == nil {
+			return []byte{}, nil
+		}
+		return v.Bytes(), nil
+	case IoUringParams:
+		return v.Bytes(), nil
+	case *IoUringParams:
+		if v == nil {
+			return []byte{}, nil
+		}
+		return v.Bytes(), nil
+	case IoUringCQE:
+		return v.Bytes(), nil
+	case *IoUringCQE:
+		if v == nil {
+			return []byte{}, nil
+		}
+		return v.Bytes(), nil
 	case uint8:
 		return packUintWidth(uint64(v), 1), nil
 	case uint16:

@@ -16,6 +16,9 @@ type ContextConfig struct {
 	Endian string
 	// OS is the target operating system name.
 	OS string
+	// Kernel is the kernel architecture for helpers that need user/kernel ABI
+	// details, such as i386 sigreturn frame segment selector defaults.
+	Kernel string
 	// Syntax is the default assembly syntax. x86 accepts "intel" or "att".
 	Syntax string
 	// Terminal is the terminal command prefix used by GDB helpers. The complete
@@ -84,6 +87,11 @@ func (c *ContextConfig) SetOS(osName string) {
 	c.OS = normalizeContextOS(osName)
 }
 
+// SetKernel changes the default kernel architecture used by helpers such as SROP.
+func (c *ContextConfig) SetKernel(kernel string) {
+	c.Kernel = strings.ToLower(strings.TrimSpace(kernel))
+}
+
 // SetTerminal changes the terminal command used by GDB helpers.
 func (c *ContextConfig) SetTerminal(command ...string) {
 	c.Terminal = append([]string{}, command...)
@@ -144,6 +152,10 @@ func contextOS() string {
 		return runtime.GOOS
 	}
 	return osName
+}
+
+func contextKernel() string {
+	return strings.ToLower(strings.TrimSpace(Context.Kernel))
 }
 
 func contextTimeout() time.Duration {

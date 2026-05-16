@@ -758,6 +758,9 @@ func gdbTerminalFromTermProgram() []string {
 	if termProgram == "" || termProgram == "iTerm.app" {
 		return nil
 	}
+	if terminal, err := GDBTerminalByName(termProgram); err == nil {
+		return terminal
+	}
 	if commandExists(termProgram) {
 		return []string{termProgram}
 	}

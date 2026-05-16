@@ -318,6 +318,7 @@ func TestGDBTerminalByName(t *testing.T) {
 		"gnome-console":       {"kgx", "--", "sh", "-lc"},
 		"wezterm":             {"wezterm", "start", "--", "sh", "-lc"},
 		"terminator":          {"terminator", "-e"},
+		"ghostty":             {"ghostty", "-e", "sh", "-lc"},
 		"konsole":             {"konsole", "-e", "sh", "-lc"},
 		"kconsole":            {"kconsole", "-e", "sh", "-lc"},
 		"tilix":               {"tilix", "-a", "session-add-right", "-e"},
@@ -344,6 +345,16 @@ func TestGDBTerminalByName(t *testing.T) {
 		t.Fatal("GDBTerminalByName accepted tmux command string")
 	} else if !strings.Contains(err.Error(), `Context.SetTerminal("tmux", "split-window", "-h")`) {
 		t.Fatalf("tmux terminal error = %q, want tmux SetTerminal hint", err.Error())
+	}
+}
+
+func TestGDBTerminalFromTermProgramUsesBuiltInProfile(t *testing.T) {
+	t.Setenv("TERM_PROGRAM", "ghostty")
+
+	got := gdbTerminalFromTermProgram()
+	want := []string{"ghostty", "-e", "sh", "-lc"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("gdbTerminalFromTermProgram = %#v, want %#v", got, want)
 	}
 }
 

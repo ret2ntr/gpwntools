@@ -72,6 +72,11 @@ func AsmWithOptions(code string, opts AsmOptions) ([]byte, error) {
 		return out, err
 	}
 
+	code, err := asmExpandSyscallConstants(code, arch, osName)
+	if err != nil {
+		return nil, err
+	}
+
 	toolchain, err := asmToolchain(arch, osName, opts)
 	if err != nil {
 		return nil, err
@@ -138,6 +143,7 @@ type asmToolchainConfig struct {
 	gnuArgs           []string
 	gnuAssemblers     []string
 	clangTarget       string
+	clangArgs         []string
 	objcopies         []string
 	allowHostTools    bool
 	preferLLVMObjcopy bool
@@ -193,7 +199,7 @@ func asmToolchainConfigForArch(arch string, osName string) (asmToolchainConfig, 
 			preferLLVMObjcopy: false,
 		}, nil
 	case "arm", "arm32":
-		return asmCrossToolchain(asmClangTarget("arm", osName), []string{
+		cfg := asmCrossToolchain(asmClangTarget("arm", osName), []string{
 			"arm-linux-gnueabi-as",
 			"arm-linux-gnueabihf-as",
 			"arm-none-eabi-as",
@@ -201,9 +207,12 @@ func asmToolchainConfigForArch(arch string, osName string) (asmToolchainConfig, 
 			"arm-linux-gnueabi-objcopy",
 			"arm-linux-gnueabihf-objcopy",
 			"arm-none-eabi-objcopy",
-		}), nil
+		})
+		cfg.gnuArgs = []string{"-march=armv7-a"}
+		cfg.clangArgs = []string{"-march=armv7-a"}
+		return cfg, nil
 	case "thumb", "thumb32":
-		return asmCrossToolchain(asmClangTarget("arm", osName), []string{
+		cfg := asmCrossToolchain(asmClangTarget("arm", osName), []string{
 			"arm-linux-gnueabi-as",
 			"arm-linux-gnueabihf-as",
 			"arm-none-eabi-as",
@@ -211,7 +220,10 @@ func asmToolchainConfigForArch(arch string, osName string) (asmToolchainConfig, 
 			"arm-linux-gnueabi-objcopy",
 			"arm-linux-gnueabihf-objcopy",
 			"arm-none-eabi-objcopy",
-		}), nil
+		})
+		cfg.gnuArgs = []string{"-march=armv7-a"}
+		cfg.clangArgs = []string{"-march=armv7-a"}
+		return cfg, nil
 	case "arm64", "aarch64":
 		return asmCrossToolchain(asmClangTarget("aarch64", osName), []string{
 			"aarch64-linux-gnu-as",
@@ -322,7 +334,9 @@ func selectAssembler(cfg asmToolchainConfig, opts AsmOptions) (string, []string,
 			return "", nil, false, fmt.Errorf("assembler %q not found", opts.As)
 		}
 		if isClang(path) {
-			return path, []string{"-target", cfg.clangTarget, "-c"}, true, nil
+			args := append([]string{"-target", cfg.clangTarget}, cfg.clangArgs...)
+			args = append(args, "-c")
+			return path, args, true, nil
 		}
 		return path, cfg.gnuArgs, false, nil
 	}
@@ -334,7 +348,9 @@ func selectAssembler(cfg asmToolchainConfig, opts AsmOptions) (string, []string,
 	}
 
 	if path, ok := firstExecutable([]string{"clang"}); ok {
-		return path, []string{"-target", cfg.clangTarget, "-c"}, true, nil
+		args := append([]string{"-target", cfg.clangTarget}, cfg.clangArgs...)
+		args = append(args, "-c")
+		return path, args, true, nil
 	}
 
 	return "", nil, false, fmt.Errorf("no assembler found for target %q; install one of %s or clang in the process runtime environment", cfg.clangTarget, strings.Join(cfg.gnuAssemblers, ", "))
@@ -671,13 +687,14 @@ func asmSyscallNumber(name string, arch string, osName string) (uint64, error) {
 		name = name[5:]
 	}
 	key := strings.ToLower(name)
+	osName = normalizeContextOS(osName)
+	if osName == "linux" {
+		if number, ok := linuxSyscallNumber(arch, key); ok {
+			return number, nil
+		}
+	}
+
 	table := map[string]map[string]uint64{
-		"linux/amd64": {
-			"read": 0, "write": 1, "open": 2, "close": 3, "select": 23, "execve": 59, "exit": 60,
-		},
-		"linux/i386": {
-			"exit": 1, "read": 3, "write": 4, "open": 5, "close": 6, "execve": 11, "select": 82,
-		},
 		"freebsd/amd64": {
 			"read": 3, "write": 4, "open": 5, "close": 6, "execve": 59, "select": 93, "exit": 1,
 		},
@@ -685,7 +702,7 @@ func asmSyscallNumber(name string, arch string, osName string) (uint64, error) {
 			"read": 3, "write": 4, "open": 5, "close": 6, "execve": 59, "select": 93, "exit": 1,
 		},
 	}
-	tableKey := normalizeContextOS(osName) + "/" + canonicalAsmSyscallArch(arch)
+	tableKey := osName + "/" + canonicalAsmSyscallArch(arch)
 	if syscalls, ok := table[tableKey]; ok {
 		if number, ok := syscalls[key]; ok {
 			return number, nil
@@ -694,12 +711,160 @@ func asmSyscallNumber(name string, arch string, osName string) (uint64, error) {
 	return 0, fmt.Errorf("unsupported syscall constant %q for %s", original, tableKey)
 }
 
+func asmExpandSyscallConstants(code string, arch string, osName string) (string, error) {
+	var out strings.Builder
+	lines := strings.SplitAfter(code, "\n")
+	for _, line := range lines {
+		lineBody := strings.TrimSuffix(line, "\n")
+		trailingNewline := strings.HasSuffix(line, "\n")
+
+		commentStart := asmCommentStart(lineBody, arch)
+		body := lineBody
+		comment := ""
+		if commentStart >= 0 {
+			body = lineBody[:commentStart]
+			comment = lineBody[commentStart:]
+		}
+
+		expanded, err := asmExpandSyscallConstantsInCode(body, arch, osName)
+		if err != nil {
+			return "", err
+		}
+		out.WriteString(expanded)
+		out.WriteString(comment)
+		if trailingNewline {
+			out.WriteByte('\n')
+		}
+	}
+	return out.String(), nil
+}
+
+func asmExpandSyscallConstantsInCode(code string, arch string, osName string) (string, error) {
+	var out strings.Builder
+	for i := 0; i < len(code); {
+		ch := code[i]
+		if ch == '\'' || ch == '"' {
+			end := asmQuotedStringEnd(code, i)
+			out.WriteString(code[i:end])
+			i = end
+			continue
+		}
+		if !asmIdentifierChar(ch) {
+			out.WriteByte(ch)
+			i++
+			continue
+		}
+
+		start := i
+		for i < len(code) && asmIdentifierChar(code[i]) {
+			i++
+		}
+		token := code[start:i]
+		upper := strings.ToUpper(token)
+		if !strings.HasPrefix(upper, "SYS_") && !strings.HasPrefix(upper, "__NR_") {
+			out.WriteString(token)
+			continue
+		}
+
+		number, err := asmSyscallNumber(token, arch, osName)
+		if err != nil {
+			return "", err
+		}
+		out.WriteString(strconv.FormatUint(number, 10))
+	}
+	return out.String(), nil
+}
+
+func asmCommentStart(line string, arch string) int {
+	inSingle := false
+	inDouble := false
+	escaped := false
+	for i := 0; i < len(line); i++ {
+		ch := line[i]
+		if escaped {
+			escaped = false
+			continue
+		}
+		if inSingle || inDouble {
+			if ch == '\\' {
+				escaped = true
+				continue
+			}
+			if ch == '\'' && inSingle {
+				inSingle = false
+			}
+			if ch == '"' && inDouble {
+				inDouble = false
+			}
+			continue
+		}
+		if ch == '\'' {
+			inSingle = true
+			continue
+		}
+		if ch == '"' {
+			inDouble = true
+			continue
+		}
+		if ch == '/' && i+1 < len(line) && line[i+1] == '/' {
+			return i
+		}
+		switch normalizedAsmFamily(arch) {
+		case "x86", "mips":
+			if ch == '#' {
+				return i
+			}
+		case "arm":
+			if ch == '@' {
+				return i
+			}
+		}
+	}
+	return -1
+}
+
+func asmQuotedStringEnd(code string, start int) int {
+	quote := code[start]
+	escaped := false
+	for i := start + 1; i < len(code); i++ {
+		ch := code[i]
+		if escaped {
+			escaped = false
+			continue
+		}
+		if ch == '\\' {
+			escaped = true
+			continue
+		}
+		if ch == quote {
+			return i + 1
+		}
+	}
+	return len(code)
+}
+
+func asmIdentifierChar(ch byte) bool {
+	return ch == '_' ||
+		(ch >= 'A' && ch <= 'Z') ||
+		(ch >= 'a' && ch <= 'z') ||
+		(ch >= '0' && ch <= '9')
+}
+
 func canonicalAsmSyscallArch(arch string) string {
+	arch = strings.ToLower(strings.TrimSpace(arch))
 	switch arch {
 	case "amd64", "x86_64", "x64":
 		return "amd64"
 	case "i386", "x86", "386":
 		return "i386"
+	case "arm", "arm32":
+		return "arm"
+	case "arm64", "aarch64":
+		return "aarch64"
+	case "mipsel", "mipsle":
+		return "mips"
+	case "mips64el", "mips64le":
+		return "mips64"
 	default:
 		return arch
 	}

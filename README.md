@@ -16,6 +16,7 @@ Context defaults:
 ```go
 gpwntools.Context.SetArch("amd64")
 gpwntools.Context.SetOS("linux")
+gpwntools.Context.SetKernel("amd64") // useful for i386 SROP on a 64-bit kernel
 gpwntools.Context.SetTerminal("tmux", "split-window", "-h")
 // or use a built-in profile:
 _ = gpwntools.Context.SetTerminalByName("wezterm")
@@ -98,6 +99,181 @@ code, err := gpwntools.AsmWithOptions("mov eax, SYS_select\nret", gpwntools.AsmO
 	Arch: "i386",
 	OS:   "freebsd",
 })
+```
+
+Shellcraft helpers:
+
+```go
+code := gpwntools.Shellcraft.Sh()
+payload, err := gpwntools.Shellcraft.Asm(code)
+if err != nil {
+	panic(err)
+}
+_ = payload
+```
+
+`Shellcraft` returns assembly strings, like pwntools' `shellcraft`. It uses
+`Context.Arch` and `Context.OS` by default, and currently supports Linux
+`amd64`, `i386`, `arm`, `aarch64`, `mips`, `mipsel`, `mips64`, and `mips64el`
+for common pwn snippets:
+
+`gpwntools.MustAsm(code)` assembles with the global `Context`. `Shellcraft.Asm`
+and `Shellcraft.MustAsm` assemble with that shellcraft builder's own `Arch/OS`,
+which is useful after `WithArch` or `WithOS`:
+
+```go
+orw := gpwntools.Shellcraft.ORW("/flag", 0x100)
+payload = gpwntools.Shellcraft.MustAsm(orw)
+
+sc32 := gpwntools.Shellcraft.WithArch("i386").WithOS("linux")
+payload = sc32.MustAsm(sc32.Sh())
+
+// This would use gpwntools.Context instead of sc32's i386/linux defaults.
+payload = gpwntools.MustAsm(sc32.Sh())
+
+openReadWrite := "" +
+	gpwntools.Shellcraft.PushString("/flag") +
+	gpwntools.Shellcraft.Open("rsp") +
+	gpwntools.Shellcraft.Read("rax", "rsp", 0x80) +
+	gpwntools.Shellcraft.Write(1, "rsp", "rax")
+
+_, _, _ = payload, sc32, openReadWrite
+```
+
+Available helpers include `PushString`, `Syscall`, `Sh`, `Execve`, `Open`,
+`OpenAt`, `Read`, `Write`, `Sendfile`, `Close`, `Dup2`, `Mmap`, `Mprotect`,
+`Munmap`, `IoUringSetup`, `IoUringEnter`, `IoUringRegister`, `IoUringORW`,
+`Exit`, `ORW`, and `Cat`.
+
+Architecture-specific syscall ABIs are handled for you. For example, `Open`
+uses `openat(AT_FDCWD, ...)` on `aarch64`, since Linux aarch64 does not expose
+the old `open` syscall.
+
+`Syscall` can use any Linux syscall name present in pwntools' constants for the
+supported architecture:
+
+```go
+code = gpwntools.Shellcraft.Syscall("mmap", 0, 0x1000, 7, 0x22, -1, 0)
+code = gpwntools.Shellcraft.Syscall("bpf", 0, 0, 0)
+code = gpwntools.Shellcraft.Sendfile(1, 3, 0, 0x100)
+code = gpwntools.Shellcraft.IoUringSetup(8, "rsp")
+code = gpwntools.Shellcraft.IoUringEnter("rax", 1, 1, gpwntools.IORING_ENTER_GETEVENTS, 0, 8)
+code = gpwntools.Shellcraft.IoUringORW("/flag", 0x100) // returns after write; it does not call exit
+code = gpwntools.Shellcraft.WithArch("mipsel").IoUringORW("/flag", 0x100)
+
+// Mmap picks mmap2 for 32-bit Linux ABIs where that is the shellcode-friendly
+// syscall, and mmap for 64-bit ABIs.
+code = gpwntools.Shellcraft.Mmap(0, 0x1000, 7, 0x22, -1, 0)
+_ = code
+```
+
+`IoUringORW` currently supports Linux `amd64`, `i386`, `arm`, `aarch64`,
+`mips`, `mipsel`, `mips64`, and `mips64el`.
+
+`io_uring` helpers include Linux UAPI constants and struct packers for payloads:
+
+```go
+params := gpwntools.IoUringParams{
+	Flags: gpwntools.IORING_SETUP_CQSIZE,
+}
+
+sqe := gpwntools.IoUringSQE{
+	Opcode:   gpwntools.IORING_OP_WRITE,
+	FD:       1,
+	Addr:     0xdead0000,
+	Len:      0x40,
+	UserData: 0x1337,
+}
+
+payload := gpwntools.MustFlat(params, sqe)
+_ = payload
+```
+
+`IoUringSQE.Bytes()` is 64 bytes, `IoUringParams.Bytes()` is 120 bytes, and
+`IoUringCQE.Bytes()` is 16 bytes. The `IOUring*` type and method names are
+also available as aliases if you prefer the all-caps acronym spelling.
+
+Alphanumeric shellcode:
+
+```go
+sc := gpwntools.Shellcraft.MustAsm(gpwntools.Shellcraft.Sh())
+encoded, err := gpwntools.Alphanumeric.Encode(sc)
+if err != nil {
+	panic(err)
+}
+if !gpwntools.IsAlphanumeric(encoded) {
+	panic("encoder returned non-alphanumeric bytes")
+}
+
+// Equivalent to ae64's encode(shellcode, "r13", 0x30, "fast").
+encoded, err = gpwntools.Alphanumeric.Encode(
+	sc,
+	gpwntools.WithAlphanumericRegister("r13"),
+	gpwntools.WithAlphanumericOffset(0x30),
+)
+_, _ = encoded, err
+```
+
+The alphanumeric encoder currently targets amd64 and implements ae64's `fast`
+strategy without requiring keystone or z3. The decoded shellcode is written back
+in place, so the target page must be writable.
+
+SROP helpers:
+
+```go
+frame, err := gpwntools.SigreturnFrame(
+	gpwntools.WithSigreturnFrameArch("amd64"),
+)
+if err != nil {
+	panic(err)
+}
+syscallRet := uint64(0x401000)
+sigreturnGadget := uint64(0x401010)
+
+if err := frame.SetSyscallName("mprotect"); err != nil {
+	panic(err)
+}
+_ = frame.SetArguments(0x601000, 0x1000, 7)
+_ = frame.SetSP(0x602000)
+_ = frame.SetPC(syscallRet)
+
+payload := gpwntools.MustFlat(
+	bytes.Repeat([]byte("A"), 0x28),
+	sigreturnGadget,
+	frame,
+)
+
+_, _ = payload, frame.Bytes()
+```
+
+`SigreturnFrame` uses `Context.Arch` and `Context.Endian` by default. Its
+Linux layouts match pwntools for `amd64`, `i386`, `arm`, `aarch64`, `mips`,
+and `mipsel`. For i386 frames, `Kernel` controls the default segment selectors:
+empty/`i386` uses `cs=0x73, ss=0x7b`, while `amd64` uses `cs=0x23, ss=0x2b`.
+
+```go
+frame32, err := gpwntools.SigreturnFrameWithOptions(gpwntools.SigreturnFrameOptions{
+	Arch:   "i386",
+	Kernel: "amd64",
+})
+if err != nil {
+	panic(err)
+}
+_ = frame32.Set("eax", 125)
+_ = frame32.Set("ebx", 0x601000)
+_ = frame32.Set("ecx", 0x1000)
+_ = frame32.Set("edx", 7)
+
+mipsel, err := gpwntools.SigreturnFrameWithOptions(gpwntools.SigreturnFrameOptions{
+	Arch: "mipsel",
+})
+if err != nil {
+	panic(err)
+}
+_ = mipsel.Set("$v0", 4004)
+_ = mipsel.SetArguments(1, 0xdead0000, 0x40)
+
+_, _ = frame32, mipsel
 ```
 
 ELF helpers:
