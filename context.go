@@ -21,6 +21,10 @@ type ContextConfig struct {
 	Kernel string
 	// Syntax is the default assembly syntax. x86 accepts "intel" or "att".
 	Syntax string
+	// LogLevel is a pwntools-style global logger level such as "debug",
+	// "info", "warn", "error", or "silent". When empty, the default logger's
+	// own level is used.
+	LogLevel string
 	// Terminal is the terminal command prefix used by GDB helpers. The complete
 	// shell-escaped GDB command is appended as the final argument. If empty,
 	// gpwntools auto-detects one.
@@ -90,6 +94,11 @@ func (c *ContextConfig) SetOS(osName string) {
 // SetKernel changes the default kernel architecture used by helpers such as SROP.
 func (c *ContextConfig) SetKernel(kernel string) {
 	c.Kernel = strings.ToLower(strings.TrimSpace(kernel))
+}
+
+// SetLogLevel changes the pwntools-style global logger level.
+func (c *ContextConfig) SetLogLevel(level string) {
+	c.LogLevel = strings.ToLower(strings.TrimSpace(level))
 }
 
 // SetTerminal changes the terminal command used by GDB helpers.

@@ -345,6 +345,12 @@ gpwntools.Error("failed: %v", err)
 
 gpwntools.SetLogLevel(gpwntools.LogLevelDebug)
 gpwntools.Debug("payload size: %d", len(payload))
+
+// Pwntools-style context log level. At debug level, tube send/recv calls print
+// packet hexdumps.
+gpwntools.Context.SetLogLevel("debug")
+p.SendLine([]byte("AAAA"))
+p.RecvUntil([]byte("> "))
 ```
 
 Tubes:

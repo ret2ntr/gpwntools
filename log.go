@@ -67,7 +67,7 @@ func (l *Logger) SetColor(enabled bool) {
 
 // Debug prints a debug message.
 func (l *Logger) Debug(format string, args ...any) {
-	l.print(LogLevelDebug, "[D]", "\x1b[36m", format, args...)
+	l.print(LogLevelDebug, "[DEBUG]", "\x1b[36m", format, args...)
 }
 
 // Info prints an informational message.
@@ -94,7 +94,8 @@ func (l *Logger) print(level LogLevel, prefix string, color string, format strin
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	if level < l.level || l.level == LogLevelSilent {
+	minLevel := l.effectiveLevel()
+	if level < minLevel || minLevel == LogLevelSilent {
 		return
 	}
 
@@ -111,6 +112,41 @@ func (l *Logger) print(level LogLevel, prefix string, color string, format strin
 		return
 	}
 	fmt.Fprintf(l.out, "%s %s\n", prefix, msg)
+}
+
+// Enabled reports whether a message at level would be printed.
+func (l *Logger) Enabled(level LogLevel) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	minLevel := l.effectiveLevel()
+	return level >= minLevel && minLevel != LogLevelSilent
+}
+
+func (l *Logger) effectiveLevel() LogLevel {
+	if level, ok := parseLogLevel(Context.LogLevel); ok {
+		return level
+	}
+	return l.level
+}
+
+func parseLogLevel(value string) (LogLevel, bool) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "":
+		return LogLevelInfo, false
+	case "debug":
+		return LogLevelDebug, true
+	case "info", "information":
+		return LogLevelInfo, true
+	case "warn", "warning":
+		return LogLevelWarn, true
+	case "error":
+		return LogLevelError, true
+	case "silent", "quiet", "disabled", "none":
+		return LogLevelSilent, true
+	default:
+		return LogLevelInfo, false
+	}
 }
 
 // SetLogOutput changes the default logger output.

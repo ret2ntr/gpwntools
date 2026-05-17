@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"errors"
 	"io"
+	"strings"
 	"time"
 )
 
@@ -18,7 +19,10 @@ type readDeadliner interface {
 
 // Send writes all bytes to a target.
 func Send(w io.Writer, data []byte) error {
-	_, err := io.Copy(w, bytes.NewReader(data))
+	n, err := io.Copy(w, bytes.NewReader(data))
+	if n > 0 || err == nil {
+		debugLogPacket("Sent", data[:int(n)])
+	}
 	return err
 }
 
@@ -64,12 +68,15 @@ func Recv(r io.Reader, n int) ([]byte, error) {
 		nread, err := r.Read(buf[read:])
 		read += nread
 		if err != nil {
+			debugLogPacket("Received", buf[:read])
 			return buf[:read], err
 		}
 		if nread == 0 {
+			debugLogPacket("Received", buf[:read])
 			return buf[:read], io.ErrNoProgress
 		}
 	}
+	debugLogPacket("Received", buf)
 	return buf, nil
 }
 
@@ -109,11 +116,13 @@ func RecvUntil(r io.Reader, delim []byte, drop ...bool) ([]byte, error) {
 	for {
 		b, err := reader.ReadByte()
 		if err != nil {
+			debugLogPacket("Received", out)
 			return out, err
 		}
 
 		out = append(out, b)
 		if bytes.HasSuffix(out, delim) {
+			debugLogPacket("Received", out)
 			if shouldDropDelimiter(drop) {
 				return out[:len(out)-len(delim)], nil
 			}
@@ -135,6 +144,36 @@ func RecvUntilTimeout(r io.Reader, delim []byte, timeout time.Duration, drop ...
 
 func shouldDropDelimiter(drop []bool) bool {
 	return len(drop) > 0 && drop[0]
+}
+
+func debugLogPacket(direction string, data []byte) {
+	if !Log.Enabled(LogLevelDebug) {
+		return
+	}
+	if len(data) == 0 {
+		if direction == "Received" {
+			return
+		}
+		Log.Debug("%s 0x0 bytes", direction)
+		return
+	}
+	Log.Debug("%s 0x%x bytes:\n%s", direction, len(data), indentDebugDump(Hexdump(data)))
+}
+
+func indentDebugDump(dump string) string {
+	if dump == "" {
+		return ""
+	}
+	lines := strings.SplitAfter(dump, "\n")
+	var out strings.Builder
+	for _, line := range lines {
+		if line == "" {
+			continue
+		}
+		out.WriteString("    ")
+		out.WriteString(line)
+	}
+	return out.String()
 }
 
 func withReadDeadline(r io.Reader, timeout time.Duration, fn func() error) error {
